@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+from rs.llm.validator import validate_command
+
 
 @dataclass
 class AgentContext:
@@ -157,11 +159,13 @@ class BaseAgent(ABC):
         decision.confidence = min(1.0, max(0.0, decision.confidence))
 
         if decision.proposed_command is None:
+            decision.metadata["validation_error"] = "empty_command"
             decision.fallback_recommended = True
             return decision
 
-        command_name = decision.proposed_command.split(" ")[0]
-        if command_name not in context.available_commands:
-            decision.metadata["validation_error"] = "command_not_available"
+        validation = validate_command(context, decision.proposed_command)
+        decision.metadata["validation_error"] = validation.code
+        if not validation.is_valid:
+            decision.metadata["validation_message"] = validation.message
             decision.fallback_recommended = True
         return decision

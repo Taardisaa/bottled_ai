@@ -1,6 +1,8 @@
 import unittest
+from typing import cast
 
-from rs.llm.agents.base_agent import AgentContext, BaseAgent
+from rs.llm.agents.base_agent import AgentContext, AgentDecision, BaseAgent
+from rs.llm.config import LlmConfig
 from rs.llm.orchestrator import AIPlayerAgent
 
 
@@ -50,7 +52,7 @@ class TestBaseAgent(unittest.TestCase):
         self.assertEqual(1.0, decision.confidence)
 
     def test_orchestrator_returns_safe_fallback_on_error(self):
-        orchestrator = AIPlayerAgent()
+        orchestrator = AIPlayerAgent(config=LlmConfig(telemetry_enabled=False))
         orchestrator.register_agent("EventHandler", ExplodingAgent())
         context = AgentContext(
             handler_name="EventHandler",
@@ -61,7 +63,7 @@ class TestBaseAgent(unittest.TestCase):
 
         decision = orchestrator.decide("EventHandler", context)
 
-        self.assertIsNotNone(decision)
+        decision = cast(AgentDecision, decision)
         self.assertTrue(decision.fallback_recommended)
         self.assertIsNone(decision.proposed_command)
 

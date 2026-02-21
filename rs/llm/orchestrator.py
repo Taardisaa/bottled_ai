@@ -1,16 +1,28 @@
 from __future__ import annotations
 
+import time
 from typing import Dict
 
 from rs.llm.agents.base_agent import AgentContext, AgentDecision, BaseAgent
+from rs.llm.config import LlmConfig, load_llm_config
+from rs.llm.telemetry import build_decision_telemetry, write_decision_telemetry
 
 
 class AIPlayerAgent:
     """Registry and execution wrapper for handler-specific advisor agents.
     """
 
-    def __init__(self):
+    def __init__(self, config: LlmConfig | None = None):
+        """Create orchestrator with optional LLM configuration.
+
+        Args:
+            config: Optional explicit config. Loads from file when omitted.
+
+        Returns:
+            None.
+        """
         self._agents_by_handler: Dict[str, BaseAgent] = {}
+        self._config: LlmConfig = load_llm_config() if config is None else config
 
     def register_agent(self, handler_name: str, agent: BaseAgent) -> None:
         """Register an advisor agent.
@@ -50,13 +62,24 @@ class AIPlayerAgent:
         if agent is None:
             return None
 
+        started_at = time.perf_counter()
         try:
-            return agent.decide(context)
+            decision = agent.decide(context)
         except Exception as e:
-            return AgentDecision(
+            decision = AgentDecision(
                 proposed_command=None,
                 confidence=0.0,
                 explanation=f"agent_error:{e}",
                 fallback_recommended=True,
                 metadata={"handler_name": handler_name, "error": str(e)},
             )
+
+        if self._config.telemetry_enabled:
+            latency_ms = int((time.perf_counter() - started_at) * 1000)
+            telemetry = build_decision_telemetry(context, decision, latency_ms)
+            try:
+                write_decision_telemetry(telemetry, self._config.telemetry_path)
+            except Exception:
+                pass
+
+        return decision
