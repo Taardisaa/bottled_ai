@@ -1,5 +1,4 @@
-import json
-from typing import List
+from typing import Any, Dict, List, Tuple
 
 from rs.calculator.interfaces.memory_items import MemoryItem
 from rs.game.deck import Deck
@@ -10,9 +9,12 @@ from rs.machine.the_bots_memory_book import TheBotsMemoryBook
 
 
 class GameState:
-    def __init__(self, json_state: json, the_bots_memory_book: TheBotsMemoryBook):
+    def __init__(self, 
+            json_state: Dict[str, Any], 
+            the_bots_memory_book: TheBotsMemoryBook
+        ):
         self.the_bots_memory_book: TheBotsMemoryBook = the_bots_memory_book
-        self.json = json_state
+        self.json: Dict[str, Any] = json_state
         if "game_state" in json_state:
             if "combat_state" in json_state["game_state"]:
                 self.hand: Deck = Deck(json_state["game_state"]["combat_state"]["hand"])
@@ -35,39 +37,42 @@ class GameState:
     def is_game_running(self) -> bool:
         return self.json["in_game"]
 
-    def game_state(self):
+    def game_state(self) -> Dict[str, Any]:
         return self.json["game_state"]
 
-    def combat_state(self):
+    def combat_state(self) -> Dict[str, Any] | None:
         if 'combat_state' in self.game_state():
             return self.game_state()["combat_state"]
         else:
             return None
 
     def has_command(self, command: Command) -> bool:
-        return command.value in self.json.get("available_commands")
+        available_commands = self.json.get("available_commands")
+        if not isinstance(available_commands, list):
+            return False
+        return command.value in available_commands
 
-    def get_player_combat(self):
+    def get_player_combat(self) -> Dict[str, Any]:
         return self.game_state()["combat_state"]["player"]
 
     def get_player_health_percentage(self) -> float:
         return self.game_state()["current_hp"] / self.game_state()["max_hp"]
 
-    def get_monsters(self):
+    def get_monsters(self) -> List[Dict[str, Any]]:
         if "combat_state" not in self.game_state():
             return []
         return self.game_state()["combat_state"]["monsters"]
 
-    def get_choice_list(self):
+    def get_choice_list(self) -> List[str]:
         return self.game_state()["choice_list"]
 
-    def get_choice_list_upgrade_stripped_from_choice(self):
-        choice_list_modified = self.get_choice_list()
+    def get_choice_list_upgrade_stripped_from_choice(self) -> List[str]:
+        choice_list_modified = self.get_choice_list().copy()
         for idx, choice in enumerate(choice_list_modified):
             choice_list_modified[idx] = choice.replace("+", "")
         return choice_list_modified
 
-    def get_relics(self):
+    def get_relics(self) -> List[Dict[str, Any]]:
         return self.game_state()["relics"]
 
     def has_relic(self, relic_name: str) -> bool:
@@ -80,20 +85,20 @@ class GameState:
         for relic in self.get_relics():
             if relic['name'] == relic_name:
                 return relic['counter']
-        return False
+        return 0
 
-    def get_potions(self):
+    def get_potions(self) -> List[Dict[str, Any]]:
         return self.game_state()["potions"]
 
-    def get_held_potion_names(self):
-        potion_names = []
+    def get_held_potion_names(self) -> List[str]:
+        potion_names: List[str] = []
         for pot in self.game_state()["potions"]:
             potion_names.append(pot["name"])
         potion_names = [potion_name.lower() for potion_name in potion_names]
         return potion_names
 
-    def get_reward_potion_names(self):
-        potion_names = []
+    def get_reward_potion_names(self) -> List[str]:
+        potion_names: List[str] = []
         for reward in self.game_state()["screen_state"]["rewards"]:
             if reward["reward_type"] == "POTION":
                 potion_names.append(reward["potion"]["name"])
@@ -106,39 +111,40 @@ class GameState:
                 return False
         return True
 
-    def screen_type(self):
+    def screen_type(self) -> str:
         return self.game_state()["screen_type"]
 
-    def screen_state(self):
+    def screen_state(self) -> Dict[str, Any]:
         return self.game_state()["screen_state"]
 
-    def screen_state_max_cards(self):
+    def screen_state_max_cards(self) -> int:
         state = self.screen_state()
         return 0 if not state else state["max_cards"]
 
-    def screen_state_must_pick_card(self):
+    def screen_state_must_pick_card(self) -> bool:
         state = self.screen_state()
-        return 1 if not state else state["can_pick_zero"]
+        return False if not state else state["can_pick_zero"]
 
-    def screen_state_exhaust_cards(self):
+    def screen_state_exhaust_cards(self) -> int:
         return 0 if not self.current_action() == "ExhaustAction" else self.screen_state_max_cards()
 
-    def screen_state_discard_cards(self):
+    def screen_state_discard_cards(self) -> int:
         return 0 if not self.current_action() == "DiscardAction" else self.screen_state_max_cards()
 
-    def current_action(self):
+    def current_action(self) -> str | None:
         if self.game_state()["screen_type"] == "HAND_SELECT" or \
                 (self.combat_state() is not None and self.game_state()["screen_type"] == "GRID"):
             return self.game_state()["current_action"]
+        return None
 
-    def get_cards_discarded_this_turn(self):
+    def get_cards_discarded_this_turn(self) -> int:
         state = self.combat_state()
         return 0 if not state else state["cards_discarded_this_turn"]
 
     def floor(self) -> int:
         return self.game_state()["floor"]
 
-    def player_entangled(self):
+    def player_entangled(self) -> bool:
         return bool(next((p for p in self.get_player_combat()["powers"] if p["id"] == "Entangled"), None))
 
     def get_deck_card_list_by_id(self) -> dict[str, int]:
@@ -162,7 +168,7 @@ class GameState:
                 cards[name] = 1
         return cards
 
-    def get_map(self) -> List[dict]:
+    def get_map(self) -> List[Dict[str, Any]]:
         return self.game_state()["map"]
 
     def has_monster(self, name: str) -> bool:
@@ -174,11 +180,15 @@ class GameState:
     def get_player_block(self) -> int:
         return self.get_player_combat()['block']
 
-    def get_player_orbs(self) -> list[(Orb, int)]:
+    def get_player_orbs(self) -> List[Tuple[Orb, int]]:
         orbs = self.get_player_combat()['orbs']
         if not orbs:
             return []
-        return [(Orb(o['id']), o['evoke_amount']) for o in orbs if 'id' in o and o['id'] != 'Empty' and 'evoke_amount' in o]
+        return [
+            (Orb(o['id']), int(o['evoke_amount']))
+            for o in orbs
+            if 'id' in o and o['id'] != 'Empty' and 'evoke_amount' in o
+        ]
 
     def get_player_orb_slots(self) -> int:
         orbs = self.get_player_combat()['orbs']
@@ -186,23 +196,26 @@ class GameState:
             return 0
         return len(orbs)
 
-    def get_falling_event_options(self) -> list:
-        options = []
+    def get_falling_event_options(self) -> List[str]:
+        options: List[str] = []
 
-        def extract_card_from_text(text):
+        def extract_card_from_text(text: str) -> str | None:
             keyword = "Lose"
             if keyword in text:
                 return text.split(keyword, 1)[1].strip()
+            return None
 
         for option in self.screen_state()["options"]:
             if not option["disabled"]:
-                text = option["text"]
-                options.append(extract_card_from_text(text).lower())
+                text = str(option["text"])
+                extracted_card = extract_card_from_text(text)
+                if extracted_card is not None:
+                    options.append(extracted_card.lower())
         for idx, choice in enumerate(options):
             options[idx] = choice.replace("+", "")
         return options
 
-    def get_event(self) -> Event:
+    def get_event(self) -> Event | str:
         event_name = self.game_state()['screen_state']['event_name']
         possible_events = set(item.value for item in Event)
 
