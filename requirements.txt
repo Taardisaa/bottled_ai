@@ -9,3 +9,4 @@ langchain-community~=0.4.1
 langgraph~=1.0.1
 langsmith
 langchain-text-splitters
+pydantic>=2.7

@@ -1,15 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import importlib
 from typing import Any, Dict
-
-pydantic_module = None
-try:
-    pydantic_module = importlib.import_module("pydantic")
-    HAS_PYDANTIC = True
-except Exception:
-    HAS_PYDANTIC = False
+from pydantic import BaseModel
 
 from rs.llm.agents.base_agent import AgentContext
 from rs.utils.config import config
@@ -23,11 +16,17 @@ class EventLlmProposal:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+class EventDecisionSchema(BaseModel):
+    proposed_command: str | None = None
+    confidence: float = 0.0
+    explanation: str = ""
+
+
 class EventLlmProvider:
     """Model-backed event decision provider.
 
     This provider delegates to `rs.utils.llm_utils.ask_llm_once` and expects a
-    structured dictionary response with at least `proposed_command`.
+    structured EventDecisionSchema response.
     """
 
     def __init__(self, model: str | None = None, temperature: float = 1.0):
@@ -46,48 +45,42 @@ class EventLlmProvider:
                 metadata={"provider_error": str(e)},
             )
 
-        struct_param: Any = dict
-        if HAS_PYDANTIC and pydantic_module is not None:
-            struct_param = pydantic_module.create_model(
-                "EventDecisionSchema",
-                proposed_command=(str | None, None),
-                confidence=(float, 0.0),
-                explanation=(str, ""),
-            )
-
         response, token_total = ask_llm_once(
             message=prompt,
             model=self.model,
-            struct=struct_param,
+            struct=EventDecisionSchema,
             temperature=self.temperature,
             cache_namespace="event_advisor_agent",
         )
 
-        if response is not None and hasattr(response, "model_dump"):
-            response = response.model_dump()
+        if isinstance(response, dict):
+            try:
+                response = EventDecisionSchema.model_validate(response)
+            except Exception:
+                response = None
 
-        if not isinstance(response, dict):
+        if not isinstance(response, EventDecisionSchema):
             return EventLlmProposal(
                 proposed_command=None,
                 confidence=0.0,
-                explanation="llm_non_dict_response",
+                explanation="llm_non_schema_response",
                 metadata={"token_total": token_total},
             )
 
-        proposed_command = response.get("proposed_command")
+        proposed_command = response.proposed_command
         if proposed_command is not None:
             proposed_command = str(proposed_command).strip()
             if proposed_command == "":
                 proposed_command = None
 
-        confidence_raw = response.get("confidence", 0.0)
+        confidence_raw = response.confidence
         try:
             confidence = float(confidence_raw)
         except (TypeError, ValueError):
             confidence = 0.0
         confidence = min(1.0, max(0.0, confidence))
 
-        explanation = str(response.get("explanation", "llm_event_policy"))
+        explanation = str(response.explanation or "llm_event_policy")
         metadata = {
             "token_total": token_total,
             "provider": "llm_utils.ask_llm_once",

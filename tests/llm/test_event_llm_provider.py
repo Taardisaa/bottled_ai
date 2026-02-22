@@ -3,28 +3,26 @@ import unittest
 from unittest.mock import patch
 
 from rs.llm.agents.base_agent import AgentContext
-from rs.llm.providers.event_llm_provider import EventLlmProvider
-
-
-class FakeStructuredResponse:
-    def __init__(self, payload):
-        self._payload = payload
-
-    def model_dump(self):
-        return self._payload
+from rs.llm.providers.event_llm_provider import EventDecisionSchema, EventLlmProvider
 
 
 class TestEventLlmProvider(unittest.TestCase):
     def test_propose_reads_pydantic_llm_response(self):
-        fake_module = types.SimpleNamespace(
-            ask_llm_once=lambda **kwargs: (
-                FakeStructuredResponse({
-                    "proposed_command": "choose 0",
-                    "confidence": 0.61,
-                    "explanation": "safe path",
-                }),
+        captured = {}
+
+        def fake_ask_llm_once(**kwargs):
+            captured["struct"] = kwargs.get("struct")
+            return (
+                EventDecisionSchema(
+                    proposed_command="choose 0",
+                    confidence=0.61,
+                    explanation="safe path",
+                ),
                 77,
             )
+
+        fake_module = types.SimpleNamespace(
+            ask_llm_once=fake_ask_llm_once,
         )
         context = AgentContext(
             handler_name="CommonEventHandler",
@@ -42,8 +40,9 @@ class TestEventLlmProvider(unittest.TestCase):
         self.assertEqual(0.61, proposal.confidence)
         self.assertEqual("safe path", proposal.explanation)
         self.assertEqual(77, proposal.metadata["token_total"])
+        self.assertIs(EventDecisionSchema, captured["struct"])
 
-    def test_propose_reads_structured_llm_response(self):
+    def test_propose_accepts_dict_by_validating_into_schema(self):
         fake_module = types.SimpleNamespace(
             ask_llm_once=lambda **kwargs: (
                 {
