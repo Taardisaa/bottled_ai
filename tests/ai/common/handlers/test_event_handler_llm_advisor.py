@@ -23,7 +23,7 @@ class StaticDecisionAgent(BaseAgent):
 
 class TestEventHandlerLlmAdvisor(unittest.TestCase):
     def test_advisor_command_overrides_deterministic_choice(self):
-        orchestrator = AIPlayerAgent(config=LlmConfig(telemetry_enabled=False))
+        orchestrator = AIPlayerAgent(config=LlmConfig(enabled=True, telemetry_enabled=False))
         orchestrator.register_agent("EventHandler", StaticDecisionAgent("choose 1"))
 
         handler = CommonEventHandler(
@@ -38,7 +38,7 @@ class TestEventHandlerLlmAdvisor(unittest.TestCase):
         self.assertEqual(["choose 1", "wait 30"], action.commands)
 
     def test_invalid_advisor_command_falls_back_to_deterministic(self):
-        orchestrator = AIPlayerAgent(config=LlmConfig(telemetry_enabled=False))
+        orchestrator = AIPlayerAgent(config=LlmConfig(enabled=True, telemetry_enabled=False))
         orchestrator.register_agent("EventHandler", StaticDecisionAgent("choose 99"))
 
         handler = CommonEventHandler(
