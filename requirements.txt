@@ -11,3 +11,4 @@ langsmith
 langchain-text-splitters
 pydantic>=2.7
 litellm>=1.74.0
+debugpy
