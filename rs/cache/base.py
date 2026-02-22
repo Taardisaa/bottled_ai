@@ -11,14 +11,13 @@ from pathlib import Path
 from typing import Any, Dict, Generic, Optional, TypeVar
 
 from .config import CacheConfig
-from .utils import (
-    is_file_valid,
+from rs.utils.file_lock_utils import (
     read_json_from_zip_with_lock,
     read_json_with_lock,
-    safe_remove,
     write_json_as_zip_with_lock,
     write_json_with_lock,
 )
+from rs.utils.file_utils import is_file_valid, safe_remove
 
 # Type variables for cache data and key types
 T = TypeVar('T')  # Cache data type
@@ -120,7 +119,7 @@ class BaseCache(ABC, Generic[T, K]):
         ...
 
     @abstractmethod
-    def serialize(self, data: T) -> Optional[Dict[str, Any]]:
+    def serialize(self, data: T) -> Optional[Any]:
         """
         Convert cached data to JSON-serializable dictionary.
 
@@ -133,7 +132,7 @@ class BaseCache(ABC, Generic[T, K]):
         ...
 
     @abstractmethod
-    def deserialize(self, data: Dict[str, Any]) -> Optional[T]:
+    def deserialize(self, data: Any) -> Optional[T]:
         """
         Reconstruct cached data from dictionary.
 

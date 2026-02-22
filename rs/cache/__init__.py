@@ -3,14 +3,16 @@
 from .base import BaseCache
 from .config import CacheConfig
 from .registry import CacheRegistry, _auto_register
-from .utils import (
-    compute_hash,
-    format_cache_id,
-    is_file_valid,
-    read_json_with_lock,
-    write_json_with_lock,
+from rs.utils.common_utils import do_hash
+from rs.utils.file_lock_utils import (
     read_json_from_zip_with_lock,
+    read_json_with_lock,
     write_json_as_zip_with_lock,
+    write_json_with_lock,
+)
+from rs.utils.file_utils import (
+    format_id,
+    is_file_valid,
     safe_remove,
 )
 
@@ -31,8 +33,8 @@ __all__ = [
     "CacheRegistry",
     "ensure_cache_registry",
     # Utility functions
-    "compute_hash",
-    "format_cache_id",
+    "do_hash",
+    "format_id",
     "is_file_valid",
     "read_json_with_lock",
     "write_json_with_lock",

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ..base import BaseCache
-from ..utils import compute_hash
+from rs.utils.common_utils import do_hash
 
 
 class LlmQueryCache(BaseCache[Any, tuple]):
@@ -84,7 +84,7 @@ class LlmQueryCache(BaseCache[Any, tuple]):
         if cache_namespace:
             key_str = f"{cache_namespace}##{key_str}"
 
-        hash_key = compute_hash(key_str)
+        hash_key = do_hash(key_str)
 
         # Prepend namespace as path prefix for directory-level separation
         if cache_namespace:

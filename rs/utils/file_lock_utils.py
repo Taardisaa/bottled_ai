@@ -1,8 +1,10 @@
 """File locking and atomic write utilities for safe concurrent file operations."""
 
 import json
+import io
 import os
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any, Callable, Optional, TypeVar, List, Dict
 
@@ -244,3 +246,66 @@ def write_jsonl_with_lock(
         True if write succeeded, False otherwise
     """
     return write_with_lock(file_path, data, _serialize_jsonl, merge_fn)
+
+
+def read_json_from_zip_with_lock(zip_path: Path) -> Optional[Any]:
+    if not zip_path.is_file():
+        return None
+
+    try:
+        with open(zip_path, "rb") as f:
+            _lock_file(f, shared=True)
+            try:
+                zip_bytes = f.read()
+            finally:
+                _unlock_file(f)
+
+        with zipfile.ZipFile(io.BytesIO(zip_bytes), "r") as zf:
+            members = zf.namelist()
+            if not members:
+                logger.error(f"Zip file is empty: {zip_path}")
+                return None
+            json_content = zf.read(members[0]).decode("utf-8")
+            return json.loads(json_content)
+    except Exception as e:
+        logger.error(f"Failed to read JSON from zip {zip_path}: {e}")
+        return None
+
+
+def write_json_as_zip_with_lock(
+    zip_path: Path,
+    data: Any,
+    json_filename: Optional[str] = None,
+    indent: Optional[int] = 4,
+) -> bool:
+    try:
+        zip_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if json_filename is None:
+            json_filename = zip_path.stem
+            if not json_filename.endswith(".json"):
+                json_filename += ".json"
+
+        json_bytes = json.dumps(data, indent=indent).encode("utf-8")
+
+        temp_fd, temp_path = tempfile.mkstemp(dir=zip_path.parent, suffix=".tmp.zip")
+        try:
+            with os.fdopen(temp_fd, "wb") as temp_f:
+                _lock_file(temp_f, shared=False)
+                try:
+                    with zipfile.ZipFile(temp_f, "w", zipfile.ZIP_DEFLATED) as zf:
+                        zf.writestr(json_filename, json_bytes)
+                    temp_f.flush()
+                    os.fsync(temp_f.fileno())
+                finally:
+                    _unlock_file(temp_f)
+
+            os.replace(temp_path, zip_path)
+            return True
+        except Exception:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+            raise
+    except Exception as e:
+        logger.error(f"Failed to write JSON as zip to {zip_path}: {e}")
+        return False
