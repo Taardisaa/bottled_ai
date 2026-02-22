@@ -23,7 +23,9 @@ class TestUtilsConfig(unittest.TestCase):
             )
             env_path.write_text(
                 "OPENAI_API_KEY=test-openai\n"
-                "ANTHROPIC_API_KEY=test-anthropic\n",
+                "ANTHROPIC_API_KEY=test-anthropic\n"
+                "OPENROUTER_API_KEY=test-openrouter\n"
+                "OPENROUTER_BASE_URL=https://openrouter.ai/api/v1\n",
                 encoding="utf-8",
             )
 
@@ -33,6 +35,8 @@ class TestUtilsConfig(unittest.TestCase):
             self.assertEqual("dataset_local", loaded.dataset_dir_path)
             self.assertEqual("test-openai", loaded.openai_key)
             self.assertEqual("test-anthropic", loaded.anthropic_key)
+            self.assertEqual("test-openrouter", loaded.openrouter_key)
+            self.assertEqual("https://openrouter.ai/api/v1", loaded.openrouter_base_url)
             self.assertFalse(loaded.get_load_cache_option("llm_query"))
             self.assertTrue(loaded.get_store_cache_option("llm_query"))
 

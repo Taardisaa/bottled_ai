@@ -1,4 +1,6 @@
 fast_llm_model: gpt-5-mini
+# Use OpenRouter by setting fast_llm_model to openrouter/<provider>/<model>
+# Example: openrouter/openai/gpt-5-mini
 dataset_dir_path: dataset
 cache:
   load_options:

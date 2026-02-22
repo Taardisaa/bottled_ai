@@ -28,6 +28,8 @@ class Config:
     dataset_dir_path: str = "dataset"
     openai_key: str = ""
     anthropic_key: str = ""
+    openrouter_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
     load_cache_options: dict[str, bool] = field(default_factory=lambda: {"llm_query": True})
     store_cache_options: dict[str, bool] = field(default_factory=lambda: {"llm_query": True})
 
@@ -48,6 +50,9 @@ def load_config(config_path: str | None = None, env_path: str | None = None) -> 
 
     openai_key = os.environ.get("OPENAI_API_KEY") or dotenv_values.get("OPENAI_API_KEY", "")
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY") or dotenv_values.get("ANTHROPIC_API_KEY", "")
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY") or dotenv_values.get("OPENROUTER_API_KEY", "")
+    openrouter_base_url = os.environ.get("OPENROUTER_BASE_URL") \
+        or dotenv_values.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
     cache_values = values.get("cache", {})
     load_cache_options = dict(cache_values.get("load_options", {"llm_query": True}))
@@ -58,6 +63,8 @@ def load_config(config_path: str | None = None, env_path: str | None = None) -> 
         dataset_dir_path=str(values.get("dataset_dir_path", "dataset")),
         openai_key=str(openai_key),
         anthropic_key=str(anthropic_key),
+        openrouter_key=str(openrouter_key),
+        openrouter_base_url=str(openrouter_base_url),
         load_cache_options=load_cache_options,
         store_cache_options=store_cache_options,
     )

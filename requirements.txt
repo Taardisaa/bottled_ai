@@ -10,3 +10,4 @@ langgraph~=1.0.1
 langsmith
 langchain-text-splitters
 pydantic>=2.7
+litellm>=1.74.0
