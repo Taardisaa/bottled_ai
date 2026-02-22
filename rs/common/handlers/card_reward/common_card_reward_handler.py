@@ -1,3 +1,4 @@
+import os
 from typing import List
 
 from presentation_config import presentation_mode, p_delay
@@ -22,7 +23,7 @@ class CommonCardRewardHandler(Handler):
         self.cards_desired_for_deck: dict[str, int] = cards_desired_for_deck
         self.cards_desired_from_potions: dict[str, int] = \
             {} if cards_desired_from_potions is None else cards_desired_from_potions
-        self.advisor_orchestrator = get_event_orchestrator() if advisor_orchestrator is None else advisor_orchestrator
+        self.advisor_orchestrator = advisor_orchestrator
 
     def can_handle(self, state: GameState) -> bool:
         return state.has_command(Command.CHOOSE) \
@@ -90,8 +91,12 @@ class CommonCardRewardHandler(Handler):
         return HandlerAction(commands=["skip", "proceed"])  # So we don't look at the card rewards again.
 
     def find_advisor_choice(self, state: GameState) -> str | None:
+        if os.environ.get("LLM_ENABLED", "").strip().lower() in {"0", "false", "no", "off"}:
+            return None
+
+        orchestrator = self.advisor_orchestrator if self.advisor_orchestrator is not None else get_event_orchestrator()
         context = build_card_reward_agent_context(state, type(self).__name__)
-        decision = self.advisor_orchestrator.decide("CardRewardHandler", context)
+        decision = orchestrator.decide("CardRewardHandler", context)
         if decision is None or decision.fallback_recommended or decision.proposed_command is None:
             return None
 

@@ -123,7 +123,7 @@ class GameState:
 
     def screen_state_must_pick_card(self) -> bool:
         state = self.screen_state()
-        return False if not state else state["can_pick_zero"]
+        return True if not state else state["can_pick_zero"]
 
     def screen_state_exhaust_cards(self) -> int:
         return 0 if not self.current_action() == "ExhaustAction" else self.screen_state_max_cards()

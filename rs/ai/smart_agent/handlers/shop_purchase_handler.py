@@ -1,3 +1,5 @@
+import os
+
 from presentation_config import presentation_mode, p_delay, p_delay_s
 from rs.ai.smart_agent.config import CARD_REMOVAL_PRIORITY_LIST
 from rs.game.screen_type import ScreenType
@@ -35,7 +37,7 @@ class ShopPurchaseHandler(Handler):
             "Accuracy",
             "Blade Dance",
         ]
-        self.advisor_orchestrator = get_event_orchestrator() if advisor_orchestrator is None else advisor_orchestrator
+        self.advisor_orchestrator = advisor_orchestrator
 
     def can_handle(self, state: GameState) -> bool:
         return state.screen_type() == ScreenType.SHOP_SCREEN.value
@@ -124,8 +126,12 @@ class ShopPurchaseHandler(Handler):
         return ''
 
     def find_advisor_choice(self, state: GameState) -> str | None:
+        if os.environ.get("LLM_ENABLED", "").strip().lower() in {"0", "false", "no", "off"}:
+            return None
+
+        orchestrator = self.advisor_orchestrator if self.advisor_orchestrator is not None else get_event_orchestrator()
         context = build_shop_purchase_agent_context(state, type(self).__name__)
-        decision = self.advisor_orchestrator.decide("ShopPurchaseHandler", context)
+        decision = orchestrator.decide("ShopPurchaseHandler", context)
         if decision is None or decision.fallback_recommended or decision.proposed_command is None:
             return None
 
