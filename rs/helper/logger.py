@@ -1,8 +1,8 @@
-import os
-import shutil
-
 from datetime import datetime
+from pathlib import Path
 from typing import List
+
+from loguru import logger as loguru_logger
 
 from definitions import ROOT_DIR
 from rs.calculator.enums.card_id import CardId
@@ -18,6 +18,19 @@ current_run_calculator_missing_powers: set[str] = set()
 current_run_calculator_missing_cards: set[str] = set()
 current_run_missing_events: set[str] = set()
 
+LOG_DIR = Path(ROOT_DIR) / "logs"
+
+
+def _log_path(filename: str) -> Path:
+    path = LOG_DIR / f"{filename}.log"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _append_log_line(filename: str, message: str) -> None:
+    with _log_path(filename).open("a+", encoding="utf-8") as f:
+        f.write(message + "\n")
+
 
 def init_run_logging(seed: str):
     dt = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
@@ -30,8 +43,7 @@ def init_run_logging(seed: str):
     global current_run_missing_events
     current_run_log_count = 0
     current_run_log_file = "runs/" + dt + "--" + seed
-    with open(ROOT_DIR + "/logs/" + current_run_log_file + ".log", 'x') as file:
-        file.close()
+    _log_path(current_run_log_file).touch(exist_ok=False)
     log("Seed: " + seed, "calculator_missing_enums")
     current_run_calculator_missing_relics = set()
     current_run_calculator_missing_powers = set()
@@ -110,25 +122,18 @@ def log_run_results(state: GameState, elites: List[str], bosses: List[str], stra
         message += " Killed with Lesson Learned: " + str(state.memory_general[MemoryItem.KILLED_WITH_LESSON_LEARNED])
     if sum(state.memory_by_card[CardId.RITUAL_DAGGER][ResetSchedule.GAME].values()) > 10:
         message += " Extraordinary amount of Ritual Dagger power: " + str(sum(state.memory_by_card[CardId.RITUAL_DAGGER][ResetSchedule.GAME].values()))
-    message += "\n"
-    with open(ROOT_DIR + "/logs/run_history.log", 'a+') as f:
-        f.write(message)
-        f.close()
+    _append_log_line("run_history", message)
 
 
 def log_new_run_sequence():
-    with open(ROOT_DIR + "/logs/run_history.log", 'a+') as f:
-        f.write("-------------------------\n")
-        f.close()
+    _append_log_line("run_history", "-------------------------")
 
 
-def log(message, filename="default"):
-    f = open(ROOT_DIR + "/logs/" + filename + ".log", "a+")
-    f.write(message + "\n")
-    f.close()
+def log(message: str, filename: str = "default"):
+    _append_log_line(filename, message)
+    loguru_logger.info(message)
 
 
-def init_log(filename="default"):
-    with open(ROOT_DIR + "/logs/" + filename + ".log", 'a+') as file:
-        file.truncate(0)
-        file.close()
+def init_log(filename: str = "default"):
+    with _log_path(filename).open("w", encoding="utf-8"):
+        pass
