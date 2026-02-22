@@ -2,7 +2,7 @@ from presentation_config import presentation_mode, p_delay, p_delay_s, slow_even
 from rs.game.event import Event
 from rs.game.screen_type import ScreenType
 from rs.helper.logger import log_missing_event
-from rs.llm.agents.base_agent import AgentContext
+from rs.llm.integration.event_context import build_event_agent_context
 from rs.llm.orchestrator import AIPlayerAgent
 from rs.llm.runtime import get_event_orchestrator
 from rs.machine.command import Command
@@ -47,31 +47,7 @@ class CommonEventHandler(Handler):
         return HandlerAction(commands=["choose 0", "wait 30"])
 
     def find_advisor_choice(self, state: GameState) -> str | None:
-        available_commands = state.json.get("available_commands")
-        if not isinstance(available_commands, list):
-            available_commands = []
-
-        event = state.get_event()
-        event_name = event.value if isinstance(event, Event) else str(event)
-        game_state = state.game_state()
-        context = AgentContext(
-            handler_name=type(self).__name__,
-            screen_type=state.screen_type(),
-            available_commands=[str(command) for command in available_commands],
-            choice_list=state.get_choice_list().copy(),
-            game_state={
-                "event_name": event_name,
-                "floor": state.floor(),
-                "act": game_state.get("act"),
-                "current_hp": game_state.get("current_hp"),
-                "max_hp": game_state.get("max_hp"),
-                "gold": game_state.get("gold"),
-            },
-            extras={
-                "relic_names": [relic["name"] for relic in state.get_relics()],
-                "deck_size": len(state.deck.cards),
-            },
-        )
+        context = build_event_agent_context(state, type(self).__name__)
 
         decision = self.advisor_orchestrator.decide("EventHandler", context)
         if decision is None or decision.fallback_recommended or decision.proposed_command is None:

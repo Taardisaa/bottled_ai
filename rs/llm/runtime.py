@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from rs.llm.agents.card_reward_advisor_agent import CardRewardAdvisorAgent
 from rs.llm.agents.event_advisor_agent import EventAdvisorAgent
+from rs.llm.agents.shop_purchase_advisor_agent import ShopPurchaseAdvisorAgent
 from rs.llm.config import LlmConfig
 from rs.llm.orchestrator import AIPlayerAgent
 
@@ -13,5 +15,7 @@ def get_event_orchestrator() -> AIPlayerAgent:
     if _event_orchestrator is None:
         orchestrator = AIPlayerAgent(config=LlmConfig(telemetry_enabled=False))
         orchestrator.register_agent("EventHandler", EventAdvisorAgent())
+        orchestrator.register_agent("ShopPurchaseHandler", ShopPurchaseAdvisorAgent())
+        orchestrator.register_agent("CardRewardHandler", CardRewardAdvisorAgent())
         _event_orchestrator = orchestrator
     return _event_orchestrator
