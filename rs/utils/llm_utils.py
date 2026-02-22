@@ -35,7 +35,7 @@ def _is_openrouter_model(model: str) -> bool:
     return model.startswith("openrouter/")
 
 
-def _litellm_completion_kwargs(model: str, temperature: float) -> Dict[str, Any]:
+def _litellm_completion_kwargs(model: str, temperature: float, **extra_kwargs: Any) -> Dict[str, Any]:
     kwargs: Dict[str, Any] = {
         "model": model,
         "temperature": temperature,
@@ -43,6 +43,9 @@ def _litellm_completion_kwargs(model: str, temperature: float) -> Dict[str, Any]
     if _is_openrouter_model(model):
         kwargs["api_base"] = config.openrouter_base_url
         kwargs["api_key"] = config.openrouter_key or config.openai_key
+    for key, value in extra_kwargs.items():
+        if value is not None:
+            kwargs[key] = value
     return kwargs
 
 
@@ -74,12 +77,20 @@ def _ensure_api_key_for_model(model: str) -> bool:
         env_var = "OPENAI_API_KEY"
         config_key = config.openai_key
 
+    # Ensure OpenAI-compatible base URL overrides from OpenRouter do not leak
+    # into non-OpenRouter calls in the same process.
+    if not _is_openrouter_model(model):
+        os.environ.pop("OPENAI_BASE_URL", None)
+        os.environ.pop("OPENAI_API_BASE", None)
+
     if not config_key:
         logger.error(f"API key for model '{model}' is not set. Check your .env file.")
         return False
 
-    if not os.environ.get(env_var):
-        set_env(env_var, config_key)
+    # Always sync runtime env var to the selected provider key.
+    # This prevents stale keys from earlier calls (e.g. openrouter -> openai)
+    # from leaking across requests in the same process.
+    set_env(env_var, config_key)
 
     return True
 
@@ -295,12 +306,95 @@ def _parse_litellm_response(response: Any,
     return coerced, total_tokens
 
 
+def _normalize_temperature_for_model(model: str, temperature: float) -> float:
+    if model in ['gpt-5', 'gpt-5-mini'] and temperature != 1.0:
+        logger.warning(f"Model {model} does not support temperature other than 1.0. Setting temperature to 1.0.")
+        return 1.0
+    return temperature
+
+
+def _build_struct_convert_prompt(raw_response_text: str, struct: LLMAcceptStructParam) -> str:
+    if isinstance(struct, type) and issubclass(struct, BaseModel):
+        schema = json.dumps(struct.model_json_schema(), sort_keys=True)
+        return (
+            "Convert the following model output into a JSON object that strictly matches this JSON Schema. "
+            "Return only the JSON object and no extra text.\n"
+            f"Schema:\n{schema}\n"
+            "Model output to convert:\n"
+            f"{raw_response_text}"
+        )
+
+    return (
+        "Convert the following model output into a valid JSON object. "
+        "Return only the JSON object and no extra text.\n"
+        "Model output to convert:\n"
+        f"{raw_response_text}"
+    )
+
+
+def _ask_llm_once_two_layer(
+        message: str,
+        model: str,
+        struct: LLMAcceptStructParam,
+        temperature: float,
+) -> Tuple[Optional[LLMLoadedResponse], int]:
+    first_temperature = _normalize_temperature_for_model(model, temperature)
+    first_kwargs = _litellm_completion_kwargs(model, first_temperature)
+    first_raw = completion(
+        messages=[{"role": "user", "content": message}],
+        **first_kwargs,
+    )
+
+    if hasattr(first_raw, "model_dump"):
+        first_response_dict = getattr(first_raw, "model_dump")()
+    else:
+        first_response_dict = first_raw
+    if not isinstance(first_response_dict, dict):
+        logger.error("Unexpected LiteLLM first-stage response type")
+        return None, 0
+
+    first_tokens = int(first_response_dict.get("usage", {}).get("total_tokens", 0) or 0)
+    first_content = _extract_litellm_content(first_response_dict)
+    if first_content is None:
+        logger.error("Unexpected LiteLLM response content for first-stage unstructured call")
+        return None, first_tokens
+
+    if isinstance(first_content, (dict, list)):
+        first_content_text = json.dumps(first_content, ensure_ascii=False)
+    else:
+        first_content_text = str(first_content)
+
+    conversion_model = config.fast_llm_model
+    if not _ensure_api_key_for_model(conversion_model):
+        return None, first_tokens
+
+    second_temperature = _normalize_temperature_for_model(conversion_model, temperature)
+    second_prompt = _build_struct_convert_prompt(first_content_text, struct)
+    second_kwargs = _litellm_completion_kwargs(
+        conversion_model,
+        second_temperature,
+        response_format=struct,
+    )
+
+    second_raw = completion(
+        messages=[{"role": "user", "content": second_prompt}],
+        **second_kwargs,
+    )
+    second_parsed, second_tokens = _parse_litellm_response(second_raw, struct)
+    if second_parsed is None:
+        logger.error("Unexpected LiteLLM response type or failed structured parse in second-stage conversion")
+        return None, first_tokens + second_tokens
+
+    return second_parsed, first_tokens + second_tokens
+
+
 def ask_llm_once(message: str,
                  model: str = "gpt-5-mini",
                  struct: Optional[LLMAcceptStructParam] = None,
                  temperature: float = 0.0,
                  cache_namespace: Optional[str] = None,
-                 enable_cache: bool = True) -> Tuple[Optional[LLMLoadedResponse], int]:
+                 enable_cache: bool = True,
+                 two_layer_struct_convert: bool = False) -> Tuple[Optional[LLMLoadedResponse], int]:
     """Ask a question to the LLM and get the response.
 
     Args:
@@ -313,6 +407,9 @@ def ask_llm_once(message: str,
             isolate final patch checking results per config profile. Defaults to None.
         enable_cache (bool, optional): Additional gate for caching. When False, bypasses cache
             entirely (no load or store). AND-ed with other cache checks. Defaults to True.
+        two_layer_struct_convert (bool, optional): When True and `struct` is provided,
+            process each message through `ask_llm_once` with two-layer conversion.
+            Defaults to True.
 
     Returns:
         A tuple of (response from the LLM, total tokens used).
@@ -324,9 +421,7 @@ def ask_llm_once(message: str,
         if not _ensure_api_key_for_model(model):
             return None, 0
 
-        if model in ['gpt-5', 'gpt-5-mini'] and temperature != 1.0:
-            logger.warning(f"Model {model} does not support temperature other than 1.0. Setting temperature to 1.0.")
-            temperature = 1.0
+        temperature = _normalize_temperature_for_model(model, temperature)
 
         # Truncate message if it exceeds token limit
         original_message = message
@@ -345,15 +440,22 @@ def ask_llm_once(message: str,
             if cached_response is not None:
                 return cached_response, 0  # Cached responses don't cost tokens
 
-        completion_kwargs = _litellm_completion_kwargs(model, temperature)
-        if struct is not None and isinstance(struct, type) and issubclass(struct, BaseModel):
-            completion_kwargs["response_format"] = struct
+        if two_layer_struct_convert and struct is not None:
+            response_to_return, total_tokens = _ask_llm_once_two_layer(
+                message=message,
+                model=model,
+                struct=struct,
+                temperature=temperature,
+            )
+        else:
+            response_format = struct if struct is not None and isinstance(struct, type) and issubclass(struct, BaseModel) else None
+            completion_kwargs = _litellm_completion_kwargs(model, temperature, response_format=response_format)
 
-        raw_response = completion(
-            messages=[{"role": "user", "content": message}],
-            **completion_kwargs,
-        )
-        response_to_return, total_tokens = _parse_litellm_response(raw_response, struct)
+            raw_response = completion(
+                messages=[{"role": "user", "content": message}],
+                **completion_kwargs,
+            )
+            response_to_return, total_tokens = _parse_litellm_response(raw_response, struct)
         logger.info(f"LLM tokens used: {total_tokens}.")
         if response_to_return is None:
             logger.error("Unexpected LiteLLM response type or failed structured parse")
@@ -377,7 +479,8 @@ def ask_llm_multi(messages: Sequence[Optional[str]], model: str = "gpt-5-mini",
                   struct: Optional[LLMAcceptStructParam] = None,
                   temperature: float = 0.0,
                   cache_namespace: Optional[str] = None,
-                  enable_cache: bool = True) -> Tuple[List[Optional[LLMLoadedResponse]], int]:
+                  enable_cache: bool = True,
+                  two_layer_struct_convert: bool = False) -> Tuple[List[Optional[LLMLoadedResponse]], int]:
     """Ask multiple questions to the LLM and get responses in batch.
 
     Args:
@@ -389,6 +492,9 @@ def ask_llm_multi(messages: Sequence[Optional[str]], model: str = "gpt-5-mini",
             under this namespace (stored in a subdirectory). Defaults to None.
         enable_cache (bool, optional): Additional gate for caching. When False, bypasses cache
             entirely (no load or store). AND-ed with other cache checks. Defaults to True.
+        two_layer_struct_convert (bool, optional): When True and `struct` is provided,
+            first call the target model without structured output and then run a
+            second conversion pass into the requested schema. Defaults to False.
 
     Returns:
         A tuple of (list of responses from the LLM in the same order as input messages, total tokens used).
@@ -400,9 +506,26 @@ def ask_llm_multi(messages: Sequence[Optional[str]], model: str = "gpt-5-mini",
         if not _ensure_api_key_for_model(model):
             return [None] * len(messages), 0
 
-        if model in ['gpt-5', 'gpt-5-mini'] and temperature != 1.0:
-            logger.warning(f"Model {model} does not support temperature other than 1.0. Setting temperature to 1.0.")
-            temperature = 1.0
+        temperature = _normalize_temperature_for_model(model, temperature)
+
+        if two_layer_struct_convert and struct is not None:
+            responses: List[Optional[LLMLoadedResponse]] = [None] * len(messages)
+            total_tokens = 0
+            for i, message in enumerate(messages):
+                if message is None:
+                    continue
+                response, token_count = ask_llm_once(
+                    message=message,
+                    model=model,
+                    struct=struct,
+                    temperature=temperature,
+                    cache_namespace=cache_namespace,
+                    enable_cache=enable_cache,
+                    two_layer_struct_convert=True,
+                )
+                responses[i] = response
+                total_tokens += token_count
+            return responses, total_tokens
 
         responses: List[Optional[LLMLoadedResponse]] = [None] * len(messages)
         uncached_indices: List[int] = []
@@ -436,9 +559,8 @@ def ask_llm_multi(messages: Sequence[Optional[str]], model: str = "gpt-5-mini",
         truncated_messages = [truncate_message(msg, model=model)[0] for msg in uncached_messages]
         batch_payload = [[{"role": "user", "content": msg}] for msg in truncated_messages]
 
-        completion_kwargs = _litellm_completion_kwargs(model, temperature)
-        if struct is not None and isinstance(struct, type) and issubclass(struct, BaseModel):
-            completion_kwargs["response_format"] = struct
+        response_format = struct if struct is not None and isinstance(struct, type) and issubclass(struct, BaseModel) else None
+        completion_kwargs = _litellm_completion_kwargs(model, temperature, response_format=response_format)
 
         total_tokens = 0
         parsed_responses: List[Optional[LLMLoadedResponse]] = []

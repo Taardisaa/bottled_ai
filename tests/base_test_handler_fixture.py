@@ -1,3 +1,4 @@
+import os
 import unittest
 from typing import List, Type
 
@@ -10,6 +11,18 @@ from test_helpers.resources import load_resource_state
 class BaseTestHandlerFixture(unittest.TestCase):
     ai_handlers: List[Handler]  # should be overriden by AI package fixture
     handler: Type[Handler]  # should be overridden by children - the expected handler to respond to this state.
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._prev_llm_enabled = os.environ.get("LLM_ENABLED")
+        os.environ["LLM_ENABLED"] = "false"
+
+    def tearDown(self) -> None:
+        if self._prev_llm_enabled is None:
+            os.environ.pop("LLM_ENABLED", None)
+        else:
+            os.environ["LLM_ENABLED"] = self._prev_llm_enabled
+        super().tearDown()
 
     def execute_handler_tests(self, state_path: str, expected=None,
                               memory_book: TheBotsMemoryBook = None) -> TheBotsMemoryBook:
