@@ -1,6 +1,9 @@
 from presentation_config import presentation_mode, p_delay, p_delay_s
 from rs.ai.smart_agent.config import CARD_REMOVAL_PRIORITY_LIST
 from rs.game.screen_type import ScreenType
+from rs.llm.integration.shop_purchase_context import build_shop_purchase_agent_context
+from rs.llm.orchestrator import AIPlayerAgent
+from rs.llm.runtime import get_event_orchestrator
 from rs.machine.handlers.handler import Handler
 from rs.machine.handlers.handler_action import HandlerAction
 from rs.machine.state import GameState
@@ -8,7 +11,7 @@ from rs.machine.state import GameState
 
 class ShopPurchaseHandler(Handler):
 
-    def __init__(self):
+    def __init__(self, advisor_orchestrator: AIPlayerAgent | None = None):
         self.relics_to_buy = [
             'Kunai',
             'Shuriken',
@@ -32,11 +35,22 @@ class ShopPurchaseHandler(Handler):
             "Accuracy",
             "Blade Dance",
         ]
+        self.advisor_orchestrator = get_event_orchestrator() if advisor_orchestrator is None else advisor_orchestrator
 
     def can_handle(self, state: GameState) -> bool:
         return state.screen_type() == ScreenType.SHOP_SCREEN.value
 
     def handle(self, state: GameState) -> HandlerAction:
+        advisor_choice = self.find_advisor_choice(state)
+        if advisor_choice is not None:
+            if advisor_choice == "return":
+                if presentation_mode:
+                    return HandlerAction(commands=["wait " + p_delay, "return", "proceed"])
+                return HandlerAction(commands=["return", "proceed"])
+            if presentation_mode:
+                return HandlerAction(commands=[p_delay, advisor_choice, p_delay_s, "wait 30"])
+            return HandlerAction(commands=[advisor_choice, "wait 30"])
+
         choice = self.find_choice(state)
         if choice:
             idx = state.get_choice_list().index(choice)
@@ -108,3 +122,16 @@ class ShopPurchaseHandler(Handler):
 
         # Nothing we want / can afford, leave.
         return ''
+
+    def find_advisor_choice(self, state: GameState) -> str | None:
+        context = build_shop_purchase_agent_context(state, type(self).__name__)
+        decision = self.advisor_orchestrator.decide("ShopPurchaseHandler", context)
+        if decision is None or decision.fallback_recommended or decision.proposed_command is None:
+            return None
+
+        proposed = decision.proposed_command.strip().lower()
+        if proposed == "return":
+            return proposed
+        if not proposed.startswith("choose "):
+            return None
+        return proposed

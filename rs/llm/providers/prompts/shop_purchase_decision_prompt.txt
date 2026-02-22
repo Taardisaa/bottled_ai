@@ -1,0 +1,17 @@
+You are selecting a Slay the Spire shop command.
+Return ONLY a JSON object with keys:
+proposed_command (string or null), confidence (0..1), explanation (short string).
+
+Rules:
+- proposed_command must be one valid command from available_commands.
+- If buying or purging, prefer 'choose <index>' where index references choice_list.
+- Use 'return' when no good purchase exists.
+- Use null when no safe decision.
+
+Handler: {handler_name}
+Screen: {screen_type}
+Available commands: {available_commands}
+Choices: {choice_list}
+Floor: {floor}, Act: {act}, Gold: {gold}
+Has removable curse: {has_removable_curse}
+Deck size: {deck_size}

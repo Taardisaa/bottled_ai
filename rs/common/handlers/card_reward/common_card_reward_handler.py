@@ -96,6 +96,8 @@ class CommonCardRewardHandler(Handler):
             return None
 
         proposed = decision.proposed_command.strip().lower()
+        if proposed == "skip":
+            return proposed
         if not proposed.startswith("choose "):
             return None
         return proposed

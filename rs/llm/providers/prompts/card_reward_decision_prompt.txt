@@ -1,0 +1,18 @@
+You are selecting a Slay the Spire card reward command.
+Return ONLY a JSON object with keys:
+proposed_command (string or null), confidence (0..1), explanation (short string).
+
+Rules:
+- proposed_command must be one valid command from available_commands.
+- If choosing a card, return 'choose <index>' where index references choice_list.
+- If uncertain and skip exists, prefer 'skip'.
+- Use null when no safe decision.
+
+Handler: {handler_name}
+Screen: {screen_type}
+Available commands: {available_commands}
+Choices: {choice_list}
+Room phase: {room_phase}
+Floor: {floor}, Act: {act}, HP: {current_hp}/{max_hp}
+Deck size: {deck_size}
+Relics: {relic_names}
