@@ -2,6 +2,9 @@ from presentation_config import presentation_mode, p_delay, p_delay_s, slow_even
 from rs.game.event import Event
 from rs.game.screen_type import ScreenType
 from rs.helper.logger import log_missing_event
+from rs.llm.agents.base_agent import AgentContext
+from rs.llm.orchestrator import AIPlayerAgent
+from rs.llm.runtime import get_event_orchestrator
 from rs.machine.command import Command
 from rs.machine.handlers.handler import Handler
 from rs.machine.handlers.handler_action import HandlerAction
@@ -10,9 +13,15 @@ from rs.machine.state import GameState
 
 class CommonEventHandler(Handler):
 
-    def __init__(self, removal_priority_list, cards_desired_for_deck):
+    def __init__(
+            self,
+            removal_priority_list,
+            cards_desired_for_deck,
+            advisor_orchestrator: AIPlayerAgent | None = None,
+    ):
         self.removal_priority_list = removal_priority_list.copy()
         self.cards_desired_for_deck = cards_desired_for_deck.copy()
+        self.advisor_orchestrator = get_event_orchestrator() if advisor_orchestrator is None else advisor_orchestrator
 
     def can_handle(self, state: GameState) -> bool:
         return state.screen_type() == ScreenType.EVENT.value and state.has_command(Command.CHOOSE)
@@ -24,10 +33,50 @@ class CommonEventHandler(Handler):
                 return HandlerAction(commands=[p_delay, "choose 0", "wait 30"])
             return HandlerAction(commands=["choose 0", "wait 30"])
 
-        if self.find_event_choice(state):  # Otherwise figure out what to do below!
+        deterministic_choice = self.find_event_choice(state)
+        advisor_choice = self.find_advisor_choice(state)
+        choice = advisor_choice or deterministic_choice
+
+        if choice:  # Otherwise figure out what to do below!
             if presentation_mode or slow_events:
-                return HandlerAction(commands=[p_delay, self.find_event_choice(state), p_delay_s])
-            return HandlerAction(commands=[self.find_event_choice(state), "wait 30"])
+                return HandlerAction(commands=[p_delay, choice, p_delay_s])
+            return HandlerAction(commands=[choice, "wait 30"])
+
+        if presentation_mode or slow_events:
+            return HandlerAction(commands=[p_delay, "choose 0", p_delay_s])
+        return HandlerAction(commands=["choose 0", "wait 30"])
+
+    def find_advisor_choice(self, state: GameState) -> str | None:
+        available_commands = state.json.get("available_commands")
+        if not isinstance(available_commands, list):
+            available_commands = []
+
+        event = state.get_event()
+        event_name = event.value if isinstance(event, Event) else str(event)
+        game_state = state.game_state()
+        context = AgentContext(
+            handler_name=type(self).__name__,
+            screen_type=state.screen_type(),
+            available_commands=[str(command) for command in available_commands],
+            choice_list=state.get_choice_list().copy(),
+            game_state={
+                "event_name": event_name,
+                "floor": state.floor(),
+                "act": game_state.get("act"),
+                "current_hp": game_state.get("current_hp"),
+                "max_hp": game_state.get("max_hp"),
+                "gold": game_state.get("gold"),
+            },
+            extras={
+                "relic_names": [relic["name"] for relic in state.get_relics()],
+                "deck_size": len(state.deck.cards),
+            },
+        )
+
+        decision = self.advisor_orchestrator.decide("EventHandler", context)
+        if decision is None or decision.fallback_recommended or decision.proposed_command is None:
+            return None
+        return decision.proposed_command
 
     def find_event_choice(self, state: GameState) -> str:
         hp_per = state.get_player_health_percentage() * 100
@@ -287,3 +336,5 @@ class CommonEventHandler(Handler):
             case _:
                 log_missing_event(str(event))
                 return "choose 0"
+
+        return "choose 0"

@@ -1,1 +1,11 @@
 PyYAML>=6.0
+pexpect
+loguru
+langchain~=1.0.2
+langchain-core~=1.0.1
+langchain-openai~=1.0.1
+langchain-anthropic~=1.0.0
+langchain-community~=0.4.1
+langgraph~=1.0.1
+langsmith
+langchain-text-splitters

@@ -1,0 +1,5 @@
+presentation_mode: false
+p_delay: wait 60
+p_delay_s: wait 30
+slow_events: false
+slow_pathing: false
