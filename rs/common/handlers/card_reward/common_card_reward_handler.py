@@ -2,6 +2,9 @@ from typing import List
 
 from presentation_config import presentation_mode, p_delay
 from rs.game.screen_type import ScreenType
+from rs.llm.integration.card_reward_context import build_card_reward_agent_context
+from rs.llm.orchestrator import AIPlayerAgent
+from rs.llm.runtime import get_event_orchestrator
 from rs.machine.command import Command
 from rs.machine.handlers.handler import Handler
 from rs.machine.handlers.handler_action import HandlerAction
@@ -10,10 +13,16 @@ from rs.machine.state import GameState
 
 class CommonCardRewardHandler(Handler):
 
-    def __init__(self, cards_desired_for_deck: dict[str, int], cards_desired_from_potions: dict[str, int] = None):
+    def __init__(
+            self,
+            cards_desired_for_deck: dict[str, int],
+            cards_desired_from_potions: dict[str, int] | None = None,
+            advisor_orchestrator: AIPlayerAgent | None = None,
+    ):
         self.cards_desired_for_deck: dict[str, int] = cards_desired_for_deck
         self.cards_desired_from_potions: dict[str, int] = \
             {} if cards_desired_from_potions is None else cards_desired_from_potions
+        self.advisor_orchestrator = get_event_orchestrator() if advisor_orchestrator is None else advisor_orchestrator
 
     def can_handle(self, state: GameState) -> bool:
         return state.has_command(Command.CHOOSE) \
@@ -26,6 +35,12 @@ class CommonCardRewardHandler(Handler):
         pass
 
     def handle(self, state: GameState) -> HandlerAction:
+        advisor_choice = self.find_advisor_choice(state)
+        if advisor_choice is not None:
+            if presentation_mode:
+                return HandlerAction(commands=[p_delay, advisor_choice, "wait 30"])
+            return HandlerAction(commands=[advisor_choice, "wait 30"])
+
         choice_list = state.get_choice_list_upgrade_stripped_from_choice()
         deck_card_list = state.get_deck_card_list_by_name_with_upgrade_stripped()
 
@@ -73,3 +88,14 @@ class CommonCardRewardHandler(Handler):
         if presentation_mode:
             return HandlerAction(commands=[p_delay, "skip", "proceed"])
         return HandlerAction(commands=["skip", "proceed"])  # So we don't look at the card rewards again.
+
+    def find_advisor_choice(self, state: GameState) -> str | None:
+        context = build_card_reward_agent_context(state, type(self).__name__)
+        decision = self.advisor_orchestrator.decide("CardRewardHandler", context)
+        if decision is None or decision.fallback_recommended or decision.proposed_command is None:
+            return None
+
+        proposed = decision.proposed_command.strip().lower()
+        if not proposed.startswith("choose "):
+            return None
+        return proposed
