@@ -1,11 +1,5 @@
-"""
-Cache utility functions for hashing, TTL validation, and atomic file operations.
+"""Cache utility functions for hashing, TTL validation, and atomic file operations."""
 
-This module re-exports utilities from the main utils package for use by cache implementations,
-and provides compressed JSON read/write helpers for the BaseCache compression feature.
-"""
-
-import fcntl
 import io
 import json
 import logging
@@ -15,18 +9,23 @@ import zipfile
 from pathlib import Path
 from typing import Any, Optional
 
-from utils.common_utils import do_hash
-from utils.file_lock_utils import (
+if os.name == "nt":
+    import msvcrt
+else:
+    import fcntl
+
+from rs.utils.file_lock_utils import (
     read_with_lock,
     write_with_lock,
     read_json_with_lock,
     write_json_with_lock,
 )
-from utils.file_utils import (
+from rs.utils.file_utils import (
     is_file_valid,
     format_id as format_cache_id,
     safe_remove,
 )
+from rs.utils.common_utils import do_hash
 
 logger = logging.getLogger("cache.utils")
 
@@ -58,6 +57,31 @@ def compute_hash(input_str: str, algorithm: str = "sha256") -> str:
     return do_hash(input_str, algorithm)
 
 
+def _lock_file(file_obj: Any, shared: bool) -> None:
+    if os.name == "nt":
+        file_obj.flush()
+        file_obj.seek(0)
+        mode = msvcrt.LK_RLCK if shared else msvcrt.LK_LOCK
+        msvcrt.locking(file_obj.fileno(), mode, 1)
+        return
+
+    lock_sh = getattr(fcntl, "LOCK_SH")
+    lock_ex = getattr(fcntl, "LOCK_EX")
+    lock_type = lock_sh if shared else lock_ex
+    getattr(fcntl, "flock")(file_obj.fileno(), lock_type)
+
+
+def _unlock_file(file_obj: Any) -> None:
+    if os.name == "nt":
+        file_obj.flush()
+        file_obj.seek(0)
+        msvcrt.locking(file_obj.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    lock_un = getattr(fcntl, "LOCK_UN")
+    getattr(fcntl, "flock")(file_obj.fileno(), lock_un)
+
+
 def read_json_from_zip_with_lock(zip_path: Path) -> Optional[Any]:
     """
     Read JSON data from a .json.zip file with shared file lock.
@@ -77,11 +101,11 @@ def read_json_from_zip_with_lock(zip_path: Path) -> Optional[Any]:
 
     try:
         with open(zip_path, 'rb') as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+            _lock_file(f, shared=True)
             try:
                 zip_bytes = f.read()
             finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                _unlock_file(f)
 
         with zipfile.ZipFile(io.BytesIO(zip_bytes), 'r') as zf:
             members = zf.namelist()
@@ -132,14 +156,14 @@ def write_json_as_zip_with_lock(
         )
         try:
             with os.fdopen(temp_fd, 'wb') as temp_f:
-                fcntl.flock(temp_f.fileno(), fcntl.LOCK_EX)
+                _lock_file(temp_f, shared=False)
                 try:
                     with zipfile.ZipFile(temp_f, 'w', zipfile.ZIP_DEFLATED) as zf:
                         zf.writestr(json_filename, json_bytes)
                     temp_f.flush()
                     os.fsync(temp_f.fileno())
                 finally:
-                    fcntl.flock(temp_f.fileno(), fcntl.LOCK_UN)
+                    _unlock_file(temp_f)
 
             os.replace(temp_path, zip_path)
             return True

@@ -7,6 +7,8 @@ This module provides common utility functions.
 - looks_like_int: Check if the given string can be safely converted to an integer.
 """
 
+from __future__ import annotations
+
 import logging
 import subprocess
 from pathlib import Path

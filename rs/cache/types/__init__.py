@@ -16,7 +16,6 @@ from .vulnerability import (
 )
 from .diff import FileChangeCache, OutOfFuncChangeCache
 from .agent import AgentCheckResultCache, BranchTagCache, DiAgentStateCache, RoAgentStateCache, FpcAgentStateCache
-from .decompile import DecompileResultCache, IDAIndexCache, IDADatabaseCache
 from .llm import LlmQueryCache
 from .git_api import GitApiCache
 from .web import WebHandlerCache
@@ -40,9 +39,6 @@ __all__ = [
     "RoAgentStateCache",
     "FpcAgentStateCache",
     # Other caches
-    "DecompileResultCache",
-    "IDAIndexCache",
-    "IDADatabaseCache",
     "LlmQueryCache",
     "GitApiCache",
     "WebHandlerCache",

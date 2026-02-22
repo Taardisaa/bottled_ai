@@ -5,15 +5,12 @@ This module provides the CacheRegistry class that manages all cache type
 registrations and provides factory access to cache instances.
 """
 
-import logging
 from typing import Dict, List, Optional, Type
 
 from .base import BaseCache
 from .config import CacheConfig
 
-from utils.logging_utils import setup_logger_stdout
-
-logger = setup_logger_stdout("cache.registry")
+from loguru import logger
 
 
 class CacheRegistry:
@@ -189,56 +186,7 @@ def _auto_register() -> None:
     This function is called during module initialization to register
     all the standard cache implementations.
     """
-    # Import cache type implementations
-    try:
-        from .types.vulnerability import (
-            NvdQueryCache,
-            OsvQueryCache,
-            CveEntryCache,
-            OsvEntryCache,
-            PatchInfoCache,
-            GenericEntryCache,
-            CpeMatchCache,
-        )
-        from .types.diff import FileChangeCache, OutOfFuncChangeCache
-        from .types.agent import (
-            AgentCheckResultCache,
-            BranchTagCache,
-            DiAgentStateCache,
-            RoAgentStateCache,
-            FpcAgentStateCache,
-        )
-        from .types.decompile import DecompileResultCache, IDAIndexCache, IDADatabaseCache
-        from .types.llm import LlmQueryCache
-        from .types.git_api import GitApiCache
-        from .types.web import WebHandlerCache
+    from .types.llm import LlmQueryCache
 
-        # Register all cache types
-        for cache_class in [
-            NvdQueryCache,
-            OsvQueryCache,
-            CveEntryCache,
-            OsvEntryCache,
-            PatchInfoCache,
-            GenericEntryCache,
-            CpeMatchCache,
-            FileChangeCache,
-            OutOfFuncChangeCache,
-            AgentCheckResultCache,
-            BranchTagCache,
-            DiAgentStateCache,
-            RoAgentStateCache,
-            FpcAgentStateCache,
-            DecompileResultCache,
-            IDAIndexCache,
-            IDADatabaseCache,
-            LlmQueryCache,
-            GitApiCache,
-            WebHandlerCache,
-        ]:
-            CacheRegistry.register(cache_class.cache_type, cache_class)
-
-        logger.debug(f"Auto-registered {len(CacheRegistry.get_all_types())} cache types")
-    except ImportError as e:
-        # Cache types not yet implemented - this is fine during initial setup
-        logger.debug(f"Cache types not fully available yet: {e}")
+    CacheRegistry.register(LlmQueryCache.cache_type, LlmQueryCache)
+    logger.debug(f"Auto-registered {len(CacheRegistry.get_all_types())} cache types")

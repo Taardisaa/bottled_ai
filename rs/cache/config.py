@@ -8,10 +8,7 @@ settings, decoupling the cache system from the main application config.
 import configparser
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from config import CHPCVulnCheckerConfig
+from typing import Any, Dict, Optional
 
 
 @dataclass
@@ -140,7 +137,7 @@ class CacheConfig:
         )
 
     @classmethod
-    def from_chpc_config(cls, chpc_config: 'CHPCVulnCheckerConfig') -> 'CacheConfig':
+    def from_chpc_config(cls, chpc_config: Any) -> 'CacheConfig':
         """
         Create CacheConfig from an existing CHPCVulnCheckerConfig instance.
 
@@ -183,6 +180,39 @@ class CacheConfig:
 
         return cls(
             profile=chpc_config.config_profile,
+            dataset_dir=dataset_dir,
+            load_enabled_caches=load_enabled_caches,
+            store_enabled_caches=store_enabled_caches,
+            shared_caches=shared_caches,
+        )
+
+    @classmethod
+    def from_rs_config(cls, app_config: Any) -> "CacheConfig":
+        profile = str(getattr(app_config, "config_profile", "default"))
+        dataset_dir_path = str(getattr(app_config, "dataset_dir_path", "."))
+        dataset_dir = Path(dataset_dir_path) if dataset_dir_path else Path(".")
+
+        load_enabled_caches: Dict[str, bool] = {}
+        store_enabled_caches: Dict[str, bool] = {}
+
+        load_options = getattr(app_config, "load_cache_options", {})
+        if isinstance(load_options, dict):
+            for key, value in load_options.items():
+                load_enabled_caches[str(key)] = bool(value)
+
+        store_options = getattr(app_config, "store_cache_options", {})
+        if isinstance(store_options, dict):
+            for key, value in store_options.items():
+                store_enabled_caches[str(key)] = bool(value)
+
+        share_cache_obj: Any = getattr(app_config, "share_cache", {})
+        shared_caches: Dict[str, bool] = {}
+        if isinstance(share_cache_obj, dict):
+            for key, value in share_cache_obj.items():
+                shared_caches[str(key)] = bool(value)
+
+        return cls(
+            profile=profile,
             dataset_dir=dataset_dir,
             load_enabled_caches=load_enabled_caches,
             store_enabled_caches=store_enabled_caches,

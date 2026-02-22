@@ -220,7 +220,7 @@ def ask_llm_once(message: str,
             Returns (None, 0) on error.
     """
     try:
-        from cache import CacheRegistry, ensure_cache_registry
+        from rs.cache import CacheRegistry, ensure_cache_registry
 
         if not _ensure_api_key_for_model(model):
             return None, 0
@@ -297,7 +297,7 @@ def ask_llm_multi(messages: Sequence[Optional[str]], model: str = "gpt-5-mini",
             Returns ([None] * len(messages), 0) on error.
     """
     try:
-        from cache import CacheRegistry, ensure_cache_registry
+        from rs.cache import CacheRegistry, ensure_cache_registry
 
         if not _ensure_api_key_for_model(model):
             return [None] * len(messages), 0
