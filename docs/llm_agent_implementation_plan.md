@@ -49,7 +49,6 @@ Introduce an LLM-assisted decision system that integrates with the existing hand
   - `LLM_ENABLED`
   - `LLM_ENABLED_HANDLERS` (list)
   - `LLM_TIMEOUT_MS`
-  - `LLM_MAX_TOKENS_PER_DECISION`
 - Add telemetry schema for each decision:
   - state snapshot hash
   - handler name

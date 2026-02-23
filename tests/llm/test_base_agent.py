@@ -52,7 +52,7 @@ class TestBaseAgent(unittest.TestCase):
 
         self.assertEqual(1.0, decision.confidence)
 
-    def test_orchestrator_returns_safe_fallback_on_error(self):
+    def test_orchestrator_returns_none_on_error(self):
         orchestrator = AIPlayerAgent(config=LlmConfig(enabled=True, telemetry_enabled=False))
         orchestrator.register_agent("EventHandler", ExplodingAgent())
         context = AgentContext(
@@ -64,9 +64,7 @@ class TestBaseAgent(unittest.TestCase):
 
         decision = orchestrator.decide("EventHandler", context)
 
-        decision = cast(AgentDecision, decision)
-        self.assertTrue(decision.fallback_recommended)
-        self.assertIsNone(decision.proposed_command)
+        self.assertIsNone(decision)
 
     def test_orchestrator_respects_global_enable_flag(self):
         orchestrator = AIPlayerAgent(config=LlmConfig(enabled=False, telemetry_enabled=False))
@@ -94,7 +92,7 @@ class TestBaseAgent(unittest.TestCase):
 
         self.assertIsNone(orchestrator.decide("EventHandler", context))
 
-    def test_orchestrator_falls_back_on_low_confidence(self):
+    def test_orchestrator_returns_none_on_low_confidence(self):
         orchestrator = AIPlayerAgent(
             config=LlmConfig(enabled=True, confidence_threshold=0.8, telemetry_enabled=False)
         )
@@ -106,34 +104,10 @@ class TestBaseAgent(unittest.TestCase):
             choice_list=["a"],
         )
 
-        decision = cast(AgentDecision, orchestrator.decide("EventHandler", context))
-        self.assertTrue(decision.fallback_recommended)
-        self.assertEqual("low_confidence", decision.metadata["validation_error"])
+        decision = orchestrator.decide("EventHandler", context)
+        self.assertIsNone(decision)
 
-    def test_orchestrator_falls_back_on_token_budget(self):
-        orchestrator = AIPlayerAgent(
-            config=LlmConfig(enabled=True, max_tokens_per_decision=10, telemetry_enabled=False)
-        )
-        orchestrator.register_agent(
-            "EventHandler",
-            StubAgent({
-                "proposed_command": "choose 0",
-                "confidence": 0.95,
-                "metadata": {"token_total": 999},
-            }),
-        )
-        context = AgentContext(
-            handler_name="EventHandler",
-            screen_type="EVENT",
-            available_commands=["choose"],
-            choice_list=["a"],
-        )
-
-        decision = cast(AgentDecision, orchestrator.decide("EventHandler", context))
-        self.assertTrue(decision.fallback_recommended)
-        self.assertEqual("token_budget_exceeded", decision.metadata["validation_error"])
-
-    def test_orchestrator_falls_back_on_timeout(self):
+    def test_orchestrator_returns_none_on_timeout(self):
         class SlowAgent(BaseAgent):
             def __init__(self):
                 super().__init__("slow")
@@ -153,9 +127,8 @@ class TestBaseAgent(unittest.TestCase):
             choice_list=["a"],
         )
 
-        decision = cast(AgentDecision, orchestrator.decide("EventHandler", context))
-        self.assertTrue(decision.fallback_recommended)
-        self.assertEqual("timeout", decision.metadata["validation_error"])
+        decision = orchestrator.decide("EventHandler", context)
+        self.assertIsNone(decision)
 
     def test_orchestrator_ignores_timeout_when_set_to_negative_one(self):
         class SlowButValidAgent(BaseAgent):
@@ -177,7 +150,9 @@ class TestBaseAgent(unittest.TestCase):
             choice_list=["a"],
         )
 
-        decision = cast(AgentDecision, orchestrator.decide("EventHandler", context))
+        decision = orchestrator.decide("EventHandler", context)
+        self.assertIsNotNone(decision)
+        decision = cast(AgentDecision, decision)
         self.assertFalse(decision.fallback_recommended)
         self.assertEqual("choose 0", decision.proposed_command)
 
@@ -205,15 +180,17 @@ class TestBaseAgent(unittest.TestCase):
             config=LlmConfig(enabled=True, max_retries=0, telemetry_enabled=False)
         )
         orchestrator_no_retry.register_agent("EventHandler", no_retry_agent)
-        decision_no_retry = cast(AgentDecision, orchestrator_no_retry.decide("EventHandler", context))
-        self.assertTrue(decision_no_retry.fallback_recommended)
+        decision_no_retry = orchestrator_no_retry.decide("EventHandler", context)
+        self.assertIsNone(decision_no_retry)
 
         one_retry_agent = FlakyAgent()
         orchestrator_one_retry = AIPlayerAgent(
             config=LlmConfig(enabled=True, max_retries=1, telemetry_enabled=False)
         )
         orchestrator_one_retry.register_agent("EventHandler", one_retry_agent)
-        decision_one_retry = cast(AgentDecision, orchestrator_one_retry.decide("EventHandler", context))
+        decision_one_retry = orchestrator_one_retry.decide("EventHandler", context)
+        self.assertIsNotNone(decision_one_retry)
+        decision_one_retry = cast(AgentDecision, decision_one_retry)
         self.assertFalse(decision_one_retry.fallback_recommended)
         self.assertEqual("choose 0", decision_one_retry.proposed_command)
 

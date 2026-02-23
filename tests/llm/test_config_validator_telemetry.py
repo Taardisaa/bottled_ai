@@ -22,7 +22,6 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                     "  - ShopPurchaseHandler",
                     "timeout_ms: 2100",
                     "max_retries: 3",
-                    "max_tokens_per_decision: 333",
                     "confidence_threshold: 0.55",
                     "telemetry_enabled: false",
                     "telemetry_path: logs/custom.jsonl",
@@ -30,13 +29,30 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            config = load_llm_config(str(config_path))
+            previous = {key: os.environ.get(key) for key in [
+                "LLM_ENABLED",
+                "LLM_ENABLED_HANDLERS",
+                "LLM_TIMEOUT_MS",
+                "LLM_MAX_RETRIES",
+                "LLM_CONFIDENCE_THRESHOLD",
+                "LLM_TELEMETRY_ENABLED",
+                "LLM_TELEMETRY_PATH",
+            ]}
+            try:
+                for key in previous:
+                    os.environ.pop(key, None)
+                config = load_llm_config(str(config_path))
+            finally:
+                for key, value in previous.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
 
             self.assertTrue(config.enabled)
             self.assertEqual(["EventHandler", "ShopPurchaseHandler"], config.enabled_handlers)
             self.assertEqual(2100, config.timeout_ms)
             self.assertEqual(3, config.max_retries)
-            self.assertEqual(333, config.max_tokens_per_decision)
             self.assertEqual(0.55, config.confidence_threshold)
             self.assertFalse(config.telemetry_enabled)
             self.assertEqual("logs/custom.jsonl", config.telemetry_path)
@@ -49,7 +65,6 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                     "enabled: false",
                     "enabled_handlers: []",
                     "timeout_ms: 1500",
-                    "max_tokens_per_decision: 1000",
                     "confidence_threshold: 0.4",
                     "telemetry_enabled: true",
                     "telemetry_path: logs/base.jsonl",
@@ -62,7 +77,6 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                 "LLM_ENABLED_HANDLERS",
                 "LLM_TIMEOUT_MS",
                 "LLM_MAX_RETRIES",
-                "LLM_MAX_TOKENS_PER_DECISION",
                 "LLM_CONFIDENCE_THRESHOLD",
             ]}
 
@@ -71,7 +85,6 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                 os.environ["LLM_ENABLED_HANDLERS"] = "EventHandler,ShopPurchaseHandler"
                 os.environ["LLM_TIMEOUT_MS"] = "2200"
                 os.environ["LLM_MAX_RETRIES"] = "4"
-                os.environ["LLM_MAX_TOKENS_PER_DECISION"] = "555"
                 os.environ["LLM_CONFIDENCE_THRESHOLD"] = "0.77"
 
                 config = load_llm_config(str(config_path))
@@ -86,7 +99,6 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
             self.assertEqual(["EventHandler", "ShopPurchaseHandler"], config.enabled_handlers)
             self.assertEqual(2200, config.timeout_ms)
             self.assertEqual(4, config.max_retries)
-            self.assertEqual(555, config.max_tokens_per_decision)
             self.assertEqual(0.77, config.confidence_threshold)
 
     def test_validator_rejects_out_of_range_choose_index(self):
