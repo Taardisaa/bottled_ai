@@ -52,7 +52,7 @@ class ShopPurchaseLlmProvider:
             struct=ShopPurchaseDecisionSchema,
             temperature=self.temperature,
             cache_namespace="shop_purchase_advisor_agent",
-            two_layer_struct_convert=True,
+            two_layer_struct_convert=False,
         )
 
         if isinstance(response, dict):

@@ -52,7 +52,7 @@ class CardRewardLlmProvider:
             struct=CardRewardDecisionSchema,
             temperature=self.temperature,
             cache_namespace="card_reward_advisor_agent",
-            two_layer_struct_convert=True,
+            two_layer_struct_convert=False,
         )
 
         if isinstance(response, dict):
