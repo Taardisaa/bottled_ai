@@ -5,7 +5,9 @@ proposed_command (string or null), confidence (0..1), explanation (short string)
 Rules:
 - proposed_command must be one valid command from available_commands.
 - If choosing a card, return 'choose <index>' where index references choice_list.
-- If uncertain and skip exists, prefer 'skip'.
+- Use provided card details and current deck/hand context to evaluate synergy before deciding to skip.
+- Do not default to 'skip' only because card names are unfamiliar.
+- If uncertain and skip exists, use 'skip' conservatively.
 - Use null when no safe decision.
 
 Handler: {handler_name}
@@ -16,3 +18,9 @@ Room phase: {room_phase}
 Floor: {floor}, Act: {act}, HP: {current_hp}/{max_hp}
 Deck size: {deck_size}
 Relics: {relic_names}
+Deck card counts: {deck_card_counts}
+Current hand cards: {hand_card_names}
+Card DB status: {card_db_status}
+Choice card details (stsdb): {choice_card_details}
+Deck card details (stsdb subset): {deck_card_details}
+Hand card details (stsdb subset): {hand_card_details}

@@ -4,6 +4,13 @@
 
 Introduce an LLM-assisted decision system that integrates with the existing handler architecture, while preserving game stability and command correctness.
 
+## Current Implementation Status (as of 2026-02)
+
+- Phase 0: Implemented (`rs/llm/config.py`, `rs/llm/orchestrator.py`, `rs/llm/validator.py`, `rs/llm/telemetry.py`, `tests/llm/test_config_validator_telemetry.py`, `tests/llm/test_base_agent.py`).
+- Phase 1 (Event): Implemented (`rs/llm/agents/event_advisor_agent.py`, `rs/llm/providers/event_llm_provider.py`, `rs/llm/integration/event_context.py`, `rs/common/handlers/common_event_handler.py`, `tests/ai/common/handlers/test_event_handler_llm_advisor.py`).
+- Phase 2 (Shop + Card Reward): Implemented at integration level (`rs/llm/agents/shop_purchase_advisor_agent.py`, `rs/llm/agents/card_reward_advisor_agent.py`, `rs/llm/providers/shop_purchase_llm_provider.py`, `rs/llm/providers/card_reward_llm_provider.py`, `rs/llm/integration/shop_purchase_context.py`, `rs/llm/integration/card_reward_context.py`). Quality tuning and benchmarking are still in progress.
+- Phase 3 (Map), Phase 4 (Battle meta-advisor), Phase 5 (expansion): Not implemented yet.
+
 ---
 
 ## 1) Target Architecture
@@ -224,4 +231,4 @@ Success criteria:
 
 ## 10) Immediate Next Step
 
-Implement Phase 0 + Phase 1 (EventAdvisor) only, behind feature flags, and run benchmark seeds before enabling wider handler coverage.
+Refine Phase 2 LLM query quality (especially card reward context/tooling), then run fixed-seed benchmarking and regression checks before further rollout.
