@@ -132,7 +132,7 @@ Success criteria:
 - `available_commands`
 - `choice_list`
 - `room_type`, `floor`, `act`
-- compact player/deck/relic/potion summary
+- player/deck/relic/potion summary
 - handler-specific context blob
 
 ## 3.2 Subagent -> orchestrator output (strict JSON)
@@ -159,7 +159,7 @@ Success criteria:
   - potion metadata + tactical use windows
   - event outcomes and risk notes
 - **State summary tool**:
-  - normalized compact summary of deck/relics/powers to reduce prompt size.
+  - normalized summary of deck/relics/powers.
 
 ---
 

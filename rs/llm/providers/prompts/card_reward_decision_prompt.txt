@@ -19,8 +19,6 @@ Floor: {floor}, Act: {act}, HP: {current_hp}/{max_hp}
 Deck size: {deck_size}
 Relics: {relic_names}
 Deck card counts: {deck_card_counts}
-Current hand cards: {hand_card_names}
 Card DB status: {card_db_status}
 Choice card details (stsdb): {choice_card_details}
 Deck card details (stsdb subset): {deck_card_details}
-Hand card details (stsdb subset): {hand_card_details}

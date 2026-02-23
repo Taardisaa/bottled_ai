@@ -91,7 +91,7 @@ class CommonCardRewardHandler(Handler):
         return HandlerAction(commands=["skip", "proceed"])  # So we don't look at the card rewards again.
 
     def find_advisor_choice(self, state: GameState) -> str | None:
-        if os.environ.get("LLM_ENABLED", "").strip().lower() in {"0", "false", "no", "off"}:
+        if self.advisor_orchestrator is None and os.environ.get("LLM_ENABLED", "").strip().lower() in {"0", "false", "no", "off"}:
             return None
 
         orchestrator = self.advisor_orchestrator if self.advisor_orchestrator is not None else get_event_orchestrator()

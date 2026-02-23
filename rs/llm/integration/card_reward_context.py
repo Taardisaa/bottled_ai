@@ -20,19 +20,6 @@ def _build_card_entries_with_counts(state: GameState) -> list[dict[str, int | st
     return entries
 
 
-def _build_hand_card_entries(state: GameState) -> list[dict[str, int | str]]:
-    if not hasattr(state, "hand"):
-        return []
-
-    entries: list[dict[str, int | str]] = []
-    for card in state.hand.cards:
-        entries.append({
-            "name": card.name.strip().lower(),
-            "upgrade_times": int(card.upgrades),
-        })
-    return entries
-
-
 def build_card_reward_agent_context(state: GameState, handler_name: str) -> AgentContext:
     available_commands = state.json.get("available_commands")
     if not isinstance(available_commands, list):
@@ -41,7 +28,6 @@ def build_card_reward_agent_context(state: GameState, handler_name: str) -> Agen
     game_state = state.game_state()
     deck_card_counts = state.get_deck_card_list_by_name_with_upgrade_stripped()
     deck_card_entries = _build_card_entries_with_counts(state)
-    hand_card_entries = _build_hand_card_entries(state)
 
     return AgentContext(
         handler_name=handler_name,
@@ -60,8 +46,6 @@ def build_card_reward_agent_context(state: GameState, handler_name: str) -> Agen
             "deck_size": len(state.deck.cards),
             "relic_names": [relic["name"] for relic in state.get_relics()],
             "deck_card_name_counts": deck_card_counts,
-            "hand_card_names": [str(entry["name"]) for entry in hand_card_entries],
             "deck_card_entries": deck_card_entries,
-            "hand_card_entries": hand_card_entries,
         },
     )

@@ -104,7 +104,6 @@ class CardRewardLlmProvider:
         deck_size = context.extras.get("deck_size", "unknown")
         relic_names = context.extras.get("relic_names", [])
         deck_card_counts = context.extras.get("deck_card_name_counts", {})
-        hand_card_names = context.extras.get("hand_card_names", [])
         card_details = self._build_card_details(context)
 
         return PROMPT_TEMPLATE.format(
@@ -120,22 +119,18 @@ class CardRewardLlmProvider:
             deck_size=deck_size,
             relic_names=relic_names,
             deck_card_counts=deck_card_counts,
-            hand_card_names=hand_card_names,
             choice_card_details=json.dumps(card_details["choice"], sort_keys=True),
             deck_card_details=json.dumps(card_details["deck"], sort_keys=True),
-            hand_card_details=json.dumps(card_details["hand"], sort_keys=True),
             card_db_status="available",
         )
 
     def _build_card_details(self, context: AgentContext) -> dict[str, list[dict[str, Any]]]:
         choice_entries = self._build_entries_from_names(context.choice_list)
         deck_entries = self._coerce_card_entries(context.extras.get("deck_card_entries"), limit=16, sort_by_count=True)
-        hand_entries = self._coerce_card_entries(context.extras.get("hand_card_entries"), limit=10, sort_by_count=False)
 
         return {
             "choice": self._query_card_detail_rows_from_entries(choice_entries),
             "deck": self._query_card_detail_rows_from_entries(deck_entries),
-            "hand": self._query_card_detail_rows_from_entries(hand_entries),
         }
 
     def _build_entries_from_names(self, card_names: list[Any]) -> list[dict[str, Any]]:

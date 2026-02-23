@@ -23,13 +23,9 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
                 "deck_size": 15,
                 "relic_names": ["Vajra"],
                 "deck_card_name_counts": {"strike": 4, "defend": 4, "pommel strike": 1},
-                "hand_card_names": ["strike", "defend"],
                 "deck_card_entries": [
                     {"name": "pommel strike+1", "upgrade_times": 1, "count": 1},
                     {"name": "strike", "upgrade_times": 0, "count": 4},
-                ],
-                "hand_card_entries": [
-                    {"name": "bash+", "upgrade_times": 1},
                 ],
             },
         )
@@ -50,7 +46,6 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
         self.assertIn("Choice card details (stsdb):", prompt)
         self.assertIn('"name": "pommel strike"', prompt)
         self.assertIn("Deck card counts:", prompt)
-        self.assertIn("Current hand cards:", prompt)
 
     def test_query_card_receives_upgrade_times(self):
         calls = []
@@ -79,12 +74,8 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
                 "deck_size": 15,
                 "relic_names": [],
                 "deck_card_name_counts": {},
-                "hand_card_names": [],
                 "deck_card_entries": [
                     {"name": "searing blow+7", "upgrade_times": 7, "count": 1},
-                ],
-                "hand_card_entries": [
-                    {"name": "bash+", "upgrade_times": 1},
                 ],
             },
         )
@@ -93,7 +84,6 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
             provider = CardRewardLlmProvider(model="gpt-5-mini")
             provider._build_prompt(context)
 
-        self.assertIn(("bash", 1), calls)
         self.assertIn(("searing blow", 4), calls)
         self.assertIn(("searing blow", 7), calls)
         self.assertIn(("cleave", 0), calls)

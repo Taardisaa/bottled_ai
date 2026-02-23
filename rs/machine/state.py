@@ -13,6 +13,7 @@ class GameState:
             json_state: Dict[str, Any], 
             the_bots_memory_book: TheBotsMemoryBook
         ):
+        """Initialize game state wrappers and synchronize bot memory snapshots."""
         self.the_bots_memory_book: TheBotsMemoryBook = the_bots_memory_book
         self.json: Dict[str, Any] = json_state
         if "game_state" in json_state:
@@ -35,62 +36,76 @@ class GameState:
             self.memory_general = self.the_bots_memory_book.memory_general.copy()
 
     def is_game_running(self) -> bool:
+        """Return whether a run is currently active."""
         return self.json["in_game"]
 
     def game_state(self) -> Dict[str, Any]:
+        """Return the nested `game_state` payload from the protocol JSON."""
         return self.json["game_state"]
 
     def combat_state(self) -> Dict[str, Any] | None:
+        """Return combat-state payload when in combat, otherwise None."""
         if 'combat_state' in self.game_state():
             return self.game_state()["combat_state"]
         else:
             return None
 
     def has_command(self, command: Command) -> bool:
+        """Check whether a specific command is currently available."""
         available_commands = self.json.get("available_commands")
         if not isinstance(available_commands, list):
             return False
         return command.value in available_commands
 
     def get_player_combat(self) -> Dict[str, Any]:
+        """Return the player object inside combat state."""
         return self.game_state()["combat_state"]["player"]
 
     def get_player_health_percentage(self) -> float:
+        """Return current HP ratio in the range 0..1."""
         return self.game_state()["current_hp"] / self.game_state()["max_hp"]
 
     def get_monsters(self) -> List[Dict[str, Any]]:
+        """Return visible monsters for the current combat, else an empty list."""
         if "combat_state" not in self.game_state():
             return []
         return self.game_state()["combat_state"]["monsters"]
 
     def get_choice_list(self) -> List[str]:
+        """Return the current screen choice list."""
         return self.game_state()["choice_list"]
 
     def get_choice_list_upgrade_stripped_from_choice(self) -> List[str]:
+        """Return choice list with trailing plus upgrade markers removed."""
         choice_list_modified = self.get_choice_list().copy()
         for idx, choice in enumerate(choice_list_modified):
             choice_list_modified[idx] = choice.replace("+", "")
         return choice_list_modified
 
     def get_relics(self) -> List[Dict[str, Any]]:
+        """Return current relic list."""
         return self.game_state()["relics"]
 
     def has_relic(self, relic_name: str) -> bool:
+        """Return True if a relic with the given name is owned."""
         for relic in self.get_relics():
             if relic['name'].lower() == relic_name.lower():
                 return True
         return False
 
     def get_relic_counter(self, relic_name: str) -> int:
+        """Return the counter value for a relic, or 0 when absent."""
         for relic in self.get_relics():
             if relic['name'] == relic_name:
                 return relic['counter']
         return 0
 
     def get_potions(self) -> List[Dict[str, Any]]:
+        """Return current potion slots/items."""
         return self.game_state()["potions"]
 
     def get_held_potion_names(self) -> List[str]:
+        """Return lowercase names of currently held potions."""
         potion_names: List[str] = []
         for pot in self.game_state()["potions"]:
             potion_names.append(pot["name"])
@@ -98,6 +113,7 @@ class GameState:
         return potion_names
 
     def get_reward_potion_names(self) -> List[str]:
+        """Return lowercase potion names offered in rewards."""
         potion_names: List[str] = []
         for reward in self.game_state()["screen_state"]["rewards"]:
             if reward["reward_type"] == "POTION":
@@ -106,48 +122,60 @@ class GameState:
         return potion_names
 
     def are_potions_full(self) -> bool:
+        """Return True when all potion slots are occupied."""
         for pot in self.get_potions():
             if pot['id'] == "Potion Slot":
                 return False
         return True
 
     def screen_type(self) -> str:
+        """Return current screen type identifier."""
         return self.game_state()["screen_type"]
 
     def screen_state(self) -> Dict[str, Any]:
+        """Return current screen-specific payload."""
         return self.game_state()["screen_state"]
 
     def screen_state_max_cards(self) -> int:
+        """Return max selectable cards for hand/grid selection screens."""
         state = self.screen_state()
         return 0 if not state else state["max_cards"]
 
     def screen_state_must_pick_card(self) -> bool:
+        """Return whether selecting zero cards is allowed by screen state."""
         state = self.screen_state()
         return True if not state else state["can_pick_zero"]
 
     def screen_state_exhaust_cards(self) -> int:
+        """Return number of cards to exhaust for exhaust actions."""
         return 0 if not self.current_action() == "ExhaustAction" else self.screen_state_max_cards()
 
     def screen_state_discard_cards(self) -> int:
+        """Return number of cards to discard for discard actions."""
         return 0 if not self.current_action() == "DiscardAction" else self.screen_state_max_cards()
 
     def current_action(self) -> str | None:
+        """Return current action name for GRID/HAND_SELECT contexts."""
         if self.game_state()["screen_type"] == "HAND_SELECT" or \
                 (self.combat_state() is not None and self.game_state()["screen_type"] == "GRID"):
             return self.game_state()["current_action"]
         return None
 
     def get_cards_discarded_this_turn(self) -> int:
+        """Return count of cards discarded this turn in combat."""
         state = self.combat_state()
         return 0 if not state else state["cards_discarded_this_turn"]
 
     def floor(self) -> int:
+        """Return current floor number."""
         return self.game_state()["floor"]
 
     def player_entangled(self) -> bool:
+        """Return whether player currently has Entangled power."""
         return bool(next((p for p in self.get_player_combat()["powers"] if p["id"] == "Entangled"), None))
 
     def get_deck_card_list_by_id(self) -> dict[str, int]:
+        """Return card-id frequency map for deck cards (lowercased)."""
         cards = {}
         for card in self.deck.cards:
             card_id = card.id.lower()
@@ -158,6 +186,7 @@ class GameState:
         return cards
 
     def get_deck_card_list_by_name_with_upgrade_stripped(self) -> dict[str, int]:
+        """Return card-name frequency map after removing '+' markers."""
         cards = {}
         for card in self.deck.cards:
             name = card.name.replace("+", "")
@@ -169,18 +198,22 @@ class GameState:
         return cards
 
     def get_map(self) -> List[Dict[str, Any]]:
+        """Return current map graph payload."""
         return self.game_state()["map"]
 
     def has_monster(self, name: str) -> bool:
+        """Return True if a monster with exact name is present."""
         for monster in self.get_monsters():
             if monster['name'] == name:
                 return True
         return False
 
     def get_player_block(self) -> int:
+        """Return current player block in combat."""
         return self.get_player_combat()['block']
 
     def get_player_orbs(self) -> List[Tuple[Orb, int]]:
+        """Return non-empty orb types with their evoke amounts."""
         orbs = self.get_player_combat()['orbs']
         if not orbs:
             return []
@@ -191,12 +224,14 @@ class GameState:
         ]
 
     def get_player_orb_slots(self) -> int:
+        """Return total orb slot count."""
         orbs = self.get_player_combat()['orbs']
         if not orbs:
             return 0
         return len(orbs)
 
     def get_falling_event_options(self) -> List[str]:
+        """Extract lowercased card names from active Falling event options."""
         options: List[str] = []
 
         def extract_card_from_text(text: str) -> str | None:
@@ -216,6 +251,7 @@ class GameState:
         return options
 
     def get_event(self) -> Event | str:
+        """Return current event as enum when known, otherwise raw name."""
         event_name = self.game_state()['screen_state']['event_name']
         possible_events = set(item.value for item in Event)
 
