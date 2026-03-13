@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Protocol
 
-from rs.llm.agents.base_agent import AgentContext, BaseAgent
+from rs.llm.agents.base_agent import AgentContext
+from rs.llm.agents.memory_langgraph_agent import MemoryAugmentedLangGraphAgent
 from rs.llm.providers.event_llm_provider import EventLlmProposal, EventLlmProvider
 
 
@@ -14,7 +15,7 @@ class EventProposalProvider(Protocol):
         ...
 
 
-class EventAdvisorAgent(BaseAgent):
+class EventAdvisorAgent(MemoryAugmentedLangGraphAgent):
     """Pilot event advisor.
 
     The current implementation is intentionally conservative: it returns no
@@ -33,35 +34,41 @@ class EventAdvisorAgent(BaseAgent):
             if decision_provider is None else decision_provider
         self._llm_provider: EventProposalProvider = EventLlmProvider() if llm_provider is None else llm_provider
 
-    def _decide(self, context: AgentContext) -> Dict[str, Any]:
-        llm_proposal: EventLlmProposal = self._llm_provider.propose(context)
-        if llm_proposal.proposed_command is not None:
-            metadata = {
-                "phase": "phase_1_event_pilot",
-                "event_name": context.game_state.get("event_name", "unknown"),
-            }
-            metadata.update(llm_proposal.metadata)
-            return {
-                "proposed_command": llm_proposal.proposed_command,
-                "confidence": llm_proposal.confidence,
-                "explanation": llm_proposal.explanation,
-                "required_tools_used": ["llm_event_advisor"],
-                "fallback_recommended": False,
-                "metadata": metadata,
-            }
+    def propose_with_context(self, context: AgentContext) -> EventLlmProposal:
+        return self._llm_provider.propose(context)
 
+    def build_success_payload(self, context: AgentContext, proposal: EventLlmProposal) -> Dict[str, Any]:
+        metadata = {
+            "phase": "phase_1_event_pilot",
+            "event_name": context.game_state.get("event_name", "unknown"),
+            "graph_runtime": "langgraph",
+            "graph_nodes": self.graph_node_names(),
+        }
+        metadata.update(proposal.metadata)
+        return {
+            "proposed_command": proposal.proposed_command,
+            "confidence": proposal.confidence,
+            "explanation": proposal.explanation,
+            "required_tools_used": ["llm_event_advisor", "langgraph_workflow"],
+            "fallback_recommended": False,
+            "metadata": metadata,
+        }
+
+    def build_fallback_payload(self, context: AgentContext, proposal: EventLlmProposal) -> Dict[str, Any]:
         proposed_command = self._decision_provider(context)
         metadata = {
             "phase": "phase_1_event_pilot",
             "event_name": context.game_state.get("event_name", "unknown"),
             "fallback_reason": "llm_no_decision",
+            "graph_runtime": "langgraph",
+            "graph_nodes": self.graph_node_names(),
         }
-        metadata.update(llm_proposal.metadata)
+        metadata.update(proposal.metadata)
         return {
             "proposed_command": proposed_command,
             "confidence": 0.65 if proposed_command is not None else 0.0,
             "explanation": "rule_based_event_policy" if proposed_command is not None else "no_rule_match",
-            "required_tools_used": [],
+            "required_tools_used": ["langgraph_workflow"] if proposed_command is not None else [],
             "fallback_recommended": proposed_command is None,
             "metadata": metadata,
         }

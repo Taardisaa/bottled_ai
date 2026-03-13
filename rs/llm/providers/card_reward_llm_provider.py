@@ -111,6 +111,8 @@ class CardRewardLlmProvider:
         potions_full = context.extras.get("potions_full", False)
         deck_card_counts = context.extras.get("deck_card_name_counts", {})
         deck_profile = context.extras.get("deck_profile", {})
+        run_memory_summary = context.extras.get("run_memory_summary", "")
+        recent_llm_decisions = context.extras.get("recent_llm_decisions", "none")
         choice_card_summaries = context.extras.get("choice_card_summaries", [])
         reward_screen_flags = context.extras.get("reward_screen_flags", {})
         card_details = self._build_card_details(context)
@@ -135,6 +137,8 @@ class CardRewardLlmProvider:
             potions_full=potions_full,
             deck_card_counts=json.dumps(deck_card_counts, sort_keys=True),
             deck_profile=json.dumps(deck_profile, sort_keys=True),
+            run_memory_summary=run_memory_summary,
+            recent_llm_decisions=recent_llm_decisions,
             choice_card_summaries=json.dumps(choice_card_summaries, sort_keys=True),
             reward_screen_flags=json.dumps(reward_screen_flags, sort_keys=True),
             choice_card_details=json.dumps(card_details["choice"], sort_keys=True),

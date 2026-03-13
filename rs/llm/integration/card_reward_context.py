@@ -55,6 +55,7 @@ def build_card_reward_agent_context(state: GameState, handler_name: str) -> Agen
             "act_boss": game_state.get("act_boss"),
         },
         extras={
+            "run_id": run_summary["run_id"],
             "deck_size": run_summary["deck_size"],
             "relic_names": run_summary["relic_names"],
             "held_potion_names": run_summary["held_potion_names"],
@@ -62,6 +63,7 @@ def build_card_reward_agent_context(state: GameState, handler_name: str) -> Agen
             "deck_card_name_counts": run_summary["deck_card_name_counts"],
             "deck_card_entries": run_summary["deck_card_entries"],
             "deck_profile": run_summary["deck_profile"],
+            "run_memory_summary": run_summary["run_memory_summary"],
             "choice_card_summaries": _build_choice_card_summaries(state),
             "reward_screen_flags": {
                 "bowl_available": bool(state.screen_state().get("bowl_available", False)),

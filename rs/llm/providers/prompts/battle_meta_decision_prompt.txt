@@ -15,6 +15,8 @@ Current battle state:
 - Turn: {turn}
 - Player block: {player_block}
 - Player energy: {player_energy}
+- Run memory summary: {run_memory_summary}
+- Recent LLM decisions: {recent_llm_decisions}
 
 Comparator profiles:
 - Deterministic profile: {deterministic_profile}

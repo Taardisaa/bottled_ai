@@ -31,7 +31,9 @@ def build_event_agent_context(state: GameState, handler_name: str) -> AgentConte
             "gold": game_state.get("gold"),
         },
         extras={
+            "run_id": run_summary["run_id"],
             "relic_names": run_summary["relic_names"],
             "deck_size": run_summary["deck_size"],
+            "run_memory_summary": run_summary["run_memory_summary"],
         },
     )

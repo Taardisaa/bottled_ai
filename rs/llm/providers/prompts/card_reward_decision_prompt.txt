@@ -18,6 +18,8 @@ Room phase: {room_phase}
 Room type: {room_type}
 Floor: {floor}, Act: {act}, HP: {current_hp}/{max_hp}
 Class: {character_class}, Ascension: {ascension_level}, Act boss: {act_boss}
+Run memory summary: {run_memory_summary}
+Recent LLM decisions: {recent_llm_decisions}
 Deck size: {deck_size}
 Relics: {relic_names}
 Held potions: {held_potion_names}

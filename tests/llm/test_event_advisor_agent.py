@@ -2,14 +2,17 @@ import unittest
 
 from rs.llm.agents.base_agent import AgentContext
 from rs.llm.agents.event_advisor_agent import EventAdvisorAgent
+from rs.llm.agents.langgraph_base_agent import LangGraphBaseAgent
 from rs.llm.providers.event_llm_provider import EventLlmProposal
 
 
 class StubLlmProvider:
     def __init__(self, command: str | None = None):
         self.command = command
+        self.seen_recent_decisions = []
 
     def propose(self, context: AgentContext) -> EventLlmProposal:
+        self.seen_recent_decisions.append(context.extras.get("recent_llm_decisions"))
         return EventLlmProposal(
             proposed_command=self.command,
             confidence=0.8 if self.command is not None else 0.0,
@@ -19,6 +22,11 @@ class StubLlmProvider:
 
 
 class TestEventAdvisorAgent(unittest.TestCase):
+    def test_event_agent_uses_langgraph_base_class(self):
+        agent = EventAdvisorAgent(llm_provider=StubLlmProvider())
+
+        self.assertIsInstance(agent, LangGraphBaseAgent)
+
     def test_common_event_handler_proposes_cleric_decision(self):
         agent = EventAdvisorAgent(llm_provider=StubLlmProvider())
         context = AgentContext(
@@ -67,7 +75,31 @@ class TestEventAdvisorAgent(unittest.TestCase):
 
         self.assertEqual("choose 0", decision.proposed_command)
         self.assertFalse(decision.fallback_recommended)
-        self.assertEqual(["llm_event_advisor"], decision.required_tools_used)
+        self.assertEqual(["llm_event_advisor", "langgraph_workflow"], decision.required_tools_used)
+
+    def test_langgraph_flow_preserves_recent_decision_memory(self):
+        provider = StubLlmProvider(command="choose 0")
+        agent = EventAdvisorAgent(llm_provider=provider)
+        context = AgentContext(
+            handler_name="EventHandler",
+            screen_type="EVENT",
+            available_commands=["choose"],
+            choice_list=["leave", "take"],
+            game_state={"event_name": "Any Event"},
+            extras={
+                "run_memory_summary": "aggressive ironclad deck with low sustain",
+                "recent_llm_decisions": "A1 F5 EventHandler -> choose 1 (0.82, took relic)",
+            },
+        )
+
+        decision = agent.decide(context)
+
+        self.assertEqual(
+            "A1 F5 EventHandler -> choose 1 (0.82, took relic)",
+            provider.seen_recent_decisions[-1],
+        )
+        self.assertEqual("langgraph", decision.metadata["graph_runtime"])
+        self.assertIn("langgraph_workflow", decision.required_tools_used)
 
 
 if __name__ == "__main__":

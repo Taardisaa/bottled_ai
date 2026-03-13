@@ -108,6 +108,8 @@ class EventLlmProvider:
         hp = context.game_state.get("current_hp", "unknown")
         max_hp = context.game_state.get("max_hp", "unknown")
         gold = context.game_state.get("gold", "unknown")
+        run_memory_summary = context.extras.get("run_memory_summary", "")
+        recent_llm_decisions = context.extras.get("recent_llm_decisions", "none")
 
         return PROMPT_TEMPLATE.format(
             handler_name=context.handler_name,
@@ -120,5 +122,7 @@ class EventLlmProvider:
             current_hp=hp,
             max_hp=max_hp,
             gold=gold,
+            run_memory_summary=run_memory_summary,
+            recent_llm_decisions=recent_llm_decisions,
             extras=context.extras,
         )

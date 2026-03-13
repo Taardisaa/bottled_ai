@@ -17,6 +17,8 @@ Floor: {floor}, Act: {act}, HP: {current_hp}/{max_hp}, Gold: {gold}
 Room type: {room_type}
 Class: {character_class}, Ascension: {ascension_level}, Act boss: {act_boss}
 Current position: {current_position}
+Run memory summary: {run_memory_summary}
+Recent LLM decisions: {recent_llm_decisions}
 Current relics: {relic_names}
 Held potions: {held_potion_names}
 Potion slots full: {potions_full}

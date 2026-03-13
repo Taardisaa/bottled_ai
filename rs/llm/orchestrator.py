@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from dataclasses import replace
 import time
 from typing import Dict
 
 from rs.llm.agents.base_agent import AgentContext, AgentDecision, BaseAgent
 from rs.llm.config import LlmConfig, load_llm_config
+from rs.llm.decision_memory import DecisionMemoryStore
 from rs.llm.telemetry import build_decision_telemetry, write_decision_telemetry
 from rs.llm.validator import validate_command
 
@@ -14,7 +16,7 @@ class AIPlayerAgent:
     """Registry and execution wrapper for handler-specific advisor agents.
     """
 
-    def __init__(self, config: LlmConfig | None = None):
+    def __init__(self, config: LlmConfig | None = None, memory_store: DecisionMemoryStore | None = None):
         """Create orchestrator with optional LLM configuration.
 
         Args:
@@ -25,6 +27,7 @@ class AIPlayerAgent:
         """
         self._agents_by_handler: Dict[str, BaseAgent] = {}
         self._config: LlmConfig = load_llm_config() if config is None else config
+        self._memory_store = DecisionMemoryStore() if memory_store is None else memory_store
 
     def register_agent(self, handler_name: str, agent: BaseAgent) -> None:
         """Register an advisor agent.
@@ -76,13 +79,14 @@ class AIPlayerAgent:
         if agent is None:
             return None
 
+        decision_context = self._build_memory_augmented_context(context)
         started_at = time.perf_counter()
         decision: AgentDecision | None = None
         should_return_none = False
         last_error: str | None = None
         for attempt in range(self._config.max_retries + 1):
             try:
-                decision = self._decide_with_timeout(agent, context)
+                decision = self._decide_with_timeout(agent, decision_context)
                 last_error = None
                 break
             except FutureTimeoutError:
@@ -106,9 +110,12 @@ class AIPlayerAgent:
                 should_return_none = True
 
             else:
-                validation = validate_command(context, decision.proposed_command)
+                validation = validate_command(decision_context, decision.proposed_command)
                 if not validation.is_valid:
                     should_return_none = True
+
+        if not should_return_none and decision is not None:
+            self._memory_store.record(context, decision)
 
         if self._config.telemetry_enabled and decision is not None and not should_return_none:
             latency_ms = int((time.perf_counter() - started_at) * 1000)
@@ -121,3 +128,8 @@ class AIPlayerAgent:
         if should_return_none:
             return None
         return decision
+
+    def _build_memory_augmented_context(self, context: AgentContext) -> AgentContext:
+        extras = dict(context.extras)
+        extras["recent_llm_decisions"] = self._memory_store.build_recent_decisions_summary(context)
+        return replace(context, extras=extras)

@@ -39,6 +39,8 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
                     "cost_buckets": {"one_cost": 10, "two_cost": 3, "zero_cost": 2},
                     "upgraded_cards": 2,
                 },
+                "run_memory_summary": "IRONCLAD on Act 1 Floor 10 at HP 50/80 with 99 gold.",
+                "recent_llm_decisions": "A1 F9 EventHandler -> choose 0 (0.88, safe heal)",
                 "choice_card_summaries": [
                     {"index": 0, "name": "pommel strike", "type": "ATTACK", "rarity": "COMMON", "cost": 1},
                     {"index": 1, "name": "cleave", "type": "ATTACK", "rarity": "COMMON", "cost": 1},
@@ -62,6 +64,8 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
         self.assertIn("Card DB status: available", prompt)
         self.assertIn("Choice card details (stsdb):", prompt)
         self.assertIn("Class: IRONCLAD, Ascension: 5, Act boss: Hexaghost", prompt)
+        self.assertIn("Run memory summary: IRONCLAD on Act 1 Floor 10 at HP 50/80 with 99 gold.", prompt)
+        self.assertIn("Recent LLM decisions: A1 F9 EventHandler -> choose 0 (0.88, safe heal)", prompt)
         self.assertIn("Deck profile:", prompt)
         self.assertIn('"upgraded_cards": 2', prompt)
         self.assertIn("Choice card summaries:", prompt)
@@ -100,6 +104,8 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
                 "deck_card_entries": [
                     {"name": "searing blow+7", "upgrade_times": 7, "count": 1},
                 ],
+                "run_memory_summary": "IRONCLAD on Act 1 Floor 10 at HP 50/80 with 99 gold.",
+                "recent_llm_decisions": "none",
             },
         )
 

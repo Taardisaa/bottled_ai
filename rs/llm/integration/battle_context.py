@@ -74,6 +74,7 @@ def build_battle_meta_agent_context(
             "player_energy": player.get("energy"),
         },
         extras={
+            "run_id": run_summary["run_id"],
             "deterministic_profile": deterministic_profile,
             "available_profiles": available_profiles,
             "monster_summaries": _build_monster_summaries(state),
@@ -81,5 +82,6 @@ def build_battle_meta_agent_context(
             "relic_names": run_summary["relic_names"],
             "held_potion_names": run_summary["held_potion_names"],
             "deck_profile": run_summary["deck_profile"],
+            "run_memory_summary": run_summary["run_memory_summary"],
         },
     )

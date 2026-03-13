@@ -4,12 +4,21 @@
 
 Introduce an LLM-assisted decision system that integrates with the existing handler architecture, while preserving game stability and command correctness.
 
-## Current Implementation Status (as of 2026-02)
+## Current Implementation Status (as of 2026-03-13)
 
-- Phase 0: Implemented (`rs/llm/config.py`, `rs/llm/orchestrator.py`, `rs/llm/validator.py`, `rs/llm/telemetry.py`, `tests/llm/test_config_validator_telemetry.py`, `tests/llm/test_base_agent.py`).
-- Phase 1 (Event): Implemented (`rs/llm/agents/event_advisor_agent.py`, `rs/llm/providers/event_llm_provider.py`, `rs/llm/integration/event_context.py`, `rs/common/handlers/common_event_handler.py`, `tests/ai/common/handlers/test_event_handler_llm_advisor.py`).
-- Phase 2 (Shop + Card Reward): Implemented at integration level (`rs/llm/agents/shop_purchase_advisor_agent.py`, `rs/llm/agents/card_reward_advisor_agent.py`, `rs/llm/providers/shop_purchase_llm_provider.py`, `rs/llm/providers/card_reward_llm_provider.py`, `rs/llm/integration/shop_purchase_context.py`, `rs/llm/integration/card_reward_context.py`). Quality tuning and benchmarking are still in progress.
-- Phase 3 (Map), Phase 4 (Battle meta-advisor), Phase 5 (expansion): Not implemented yet.
+- Phase 0: Implemented and stable (`rs/llm/config.py`, `rs/llm/orchestrator.py`, `rs/llm/validator.py`, `rs/llm/telemetry.py`, `tests/llm/test_config_validator_telemetry.py`, `tests/llm/test_base_agent.py`).
+- Phase 1 (Event): Implemented and wired into shared handlers (`rs/llm/agents/event_advisor_agent.py`, `rs/llm/providers/event_llm_provider.py`, `rs/llm/integration/event_context.py`, `rs/common/handlers/common_event_handler.py`, `tests/ai/common/handlers/test_event_handler_llm_advisor.py`).
+  Refinement still needed: broader seed coverage and better prompt/memory continuity across long runs.
+- Phase 2 (Shop + Card Reward): Implemented with richer context and fixed-seed coverage (`rs/llm/agents/shop_purchase_advisor_agent.py`, `rs/llm/agents/card_reward_advisor_agent.py`, `rs/llm/providers/shop_purchase_llm_provider.py`, `rs/llm/providers/card_reward_llm_provider.py`, `rs/llm/integration/shop_purchase_context.py`, `rs/llm/integration/card_reward_context.py`, `rs/llm/benchmark_suite.py`, `tests/llm/test_benchmark_suite.py`).
+  Refinement still needed: more quality tuning and broader replay/benchmark coverage.
+- Phase 3 (Map): Implemented with deterministic-score-aware routing plus conservative overrides (`rs/llm/agents/map_advisor_agent.py`, `rs/llm/providers/map_llm_provider.py`, `rs/llm/integration/map_context.py`, `rs/common/handlers/common_map_handler.py`, `tests/ai/common/handlers/test_map_handler_llm_advisor.py`).
+  Refinement still needed: more benchmark cases around elite/shop timing and Act 2/3 survivability tradeoffs.
+- Phase 4 (Battle meta-advisor): Implemented as comparator-profile selection, not direct combat execution (`rs/llm/agents/battle_meta_advisor_agent.py`, `rs/llm/providers/battle_meta_llm_provider.py`, `rs/llm/integration/battle_context.py`, `rs/common/handlers/common_battle_handler.py`, `tests/ai/common/handlers/test_battle_handler_meta_advisor.py`).
+  Refinement still needed: broader fight coverage and eventual follow-on path toward full battle-action advice.
+- Phase 5 (Expansion / memory / caching): Partially implemented.
+  Done: shared state-summary caching and compact run summaries (`rs/llm/state_summary_cache.py`), run-local decision memory (`rs/llm/decision_memory.py`), a reusable memory-backed LangGraph advisor base (`rs/llm/agents/memory_langgraph_agent.py`), and concrete LangGraph-backed event/card/shop advisors (`rs/llm/agents/event_advisor_agent.py`, `rs/llm/agents/card_reward_advisor_agent.py`, `rs/llm/agents/shop_purchase_advisor_agent.py`).
+  In progress: broader rollout of the LangGraph pattern to map/battle and refining memory summaries for longer runs.
+  Not implemented yet: persistent decision memory beyond process lifetime and any direct full-battle LangGraph executor.
 
 ---
 
@@ -117,9 +126,22 @@ Success criteria:
 - No combat command regressions.
 - Measure incremental EV gain in benchmark fights.
 
-## Phase 5 - Optional full multi-agent expansion
-- Enable additional specialized agents only if earlier phases show value/cost efficiency.
-- Add caching + memory summaries to control token use.
+## Phase 5 - Memory and LangGraph expansion
+- Keep the current handler/orchestrator contract, but allow concrete advisors to be implemented as LangGraph workflows instead of bespoke agent classes.
+- Use `LangGraphBaseAgent` as the preferred extension point for future complex advisors.
+- Add run-scoped memory infrastructure:
+  - cached run summary
+  - recent accepted LLM decisions
+  - compact memory summaries injected into later prompts
+- Keep memory storage separate from LangGraph itself:
+  - LangGraph orchestrates flow
+  - a plain memory store provides read/write state for graph nodes
+- Start with lightweight graph shapes:
+  1. load run summary + recent decision memory
+  2. optional deterministic/tool enrichment
+  3. LLM decision node
+  4. parse/normalize back into the existing advisor output contract
+- Defer long-horizon autonomous battle execution until the memory-backed graph pattern proves stable.
 
 ---
 
@@ -230,4 +252,7 @@ Success criteria:
 
 ## 10) Immediate Next Step
 
-Refine Phase 2 LLM query quality (especially card reward context/tooling), then run fixed-seed benchmarking and regression checks before further rollout.
+Extend the LangGraph-backed Phase 5 pattern beyond events:
+- port one additional advisor with richer context (shop or card reward) onto `LangGraphBaseAgent`
+- keep using the plain decision memory store as the graph-readable memory source
+- validate that the graph-backed advisors preserve the same fallback behavior and command validation contract

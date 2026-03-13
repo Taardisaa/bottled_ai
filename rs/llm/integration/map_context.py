@@ -115,10 +115,12 @@ def build_map_agent_context(
             "current_position": current_position,
         },
         extras={
+            "run_id": run_summary["run_id"],
             "deck_profile": run_summary["deck_profile"],
             "relic_names": run_summary["relic_names"],
             "held_potion_names": run_summary["held_potion_names"],
             "potions_full": run_summary["potions_full"],
+            "run_memory_summary": run_summary["run_memory_summary"],
             "next_nodes": screen_state.get("next_nodes", []),
             "boss_available": bool(screen_state.get("boss_available", False)),
             "first_node_chosen": bool(screen_state.get("first_node_chosen", False)),

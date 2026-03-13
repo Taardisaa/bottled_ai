@@ -109,6 +109,8 @@ class BattleMetaLlmProvider:
             turn=context.game_state.get("turn", "unknown"),
             player_block=context.game_state.get("player_block", "unknown"),
             player_energy=context.game_state.get("player_energy", "unknown"),
+            run_memory_summary=context.extras.get("run_memory_summary", ""),
+            recent_llm_decisions=context.extras.get("recent_llm_decisions", "none"),
             deterministic_profile=context.extras.get("deterministic_profile", "unknown"),
             available_profiles=json.dumps(context.extras.get("available_profiles", []), sort_keys=True),
             monster_summaries=json.dumps(context.extras.get("monster_summaries", []), sort_keys=True),

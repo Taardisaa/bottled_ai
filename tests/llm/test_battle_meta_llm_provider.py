@@ -29,6 +29,8 @@ class TestBattleMetaLlmProviderPrompt(unittest.TestCase):
                 "available_profiles": ["big_fight", "general"],
                 "monster_summaries": [{"name": "Time Eater", "intent": "ATTACK_BUFF"}],
                 "player_power_summaries": [{"id": "MentalFortress", "amount": 2}],
+                "run_memory_summary": "WATCHER on Act 3 Floor 33 at HP 54/72 with 123 gold.",
+                "recent_llm_decisions": "A3 F31 MapHandler -> choose 2 (0.70, safer route)",
                 "relic_names": ["Violet Lotus"],
                 "held_potion_names": ["Dexterity Potion"],
                 "deck_profile": {"total_cards": 23, "type_counts": {"ATTACK": 7, "POWER": 4}},
@@ -40,6 +42,8 @@ class TestBattleMetaLlmProviderPrompt(unittest.TestCase):
 
         self.assertIn("Deterministic profile: big_fight", prompt)
         self.assertIn('Available profiles: ["big_fight", "general"]', prompt)
+        self.assertIn("Run memory summary: WATCHER on Act 3 Floor 33 at HP 54/72 with 123 gold.", prompt)
+        self.assertIn("Recent LLM decisions: A3 F31 MapHandler -> choose 2 (0.70, safer route)", prompt)
         self.assertIn('"name": "Time Eater"', prompt)
         self.assertIn('Relics: ["Violet Lotus"]', prompt)
         self.assertIn('Held potions: ["Dexterity Potion"]', prompt)

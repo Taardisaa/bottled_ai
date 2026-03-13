@@ -25,6 +25,9 @@ class TestStateSummaryCache(unittest.TestCase):
 
         self.assertNotIn("fake relic", second_summary["relic_names"])
         self.assertEqual(6, second_summary["deck_profile"]["type_counts"]["ATTACK"])
+        self.assertIn("IRONCLAD", second_summary["run_memory_summary"])
+        self.assertIn("Act 1 Floor 1", second_summary["run_memory_summary"])
+        self.assertTrue(str(second_summary["run_id"]).startswith("ironclad:"))
 
 
 if __name__ == "__main__":

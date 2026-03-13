@@ -82,15 +82,63 @@ def _build_deck_profile(state: GameState) -> dict[str, Any]:
 
 
 def _build_run_summary(state: GameState) -> dict[str, Any]:
+    game_state = state.game_state()
+    deck_profile = _build_deck_profile(state)
+    relic_names = [relic["name"] for relic in state.get_relics()]
+    held_potion_names = state.get_held_potion_names()
+
     return {
+        "run_id": _build_run_id(game_state),
         "deck_size": len(state.deck.cards),
-        "deck_profile": _build_deck_profile(state),
+        "deck_profile": deck_profile,
         "deck_card_name_counts": state.get_deck_card_list_by_name_with_upgrade_stripped(),
         "deck_card_entries": _build_card_entries_with_counts(state),
-        "relic_names": [relic["name"] for relic in state.get_relics()],
-        "held_potion_names": state.get_held_potion_names(),
+        "relic_names": relic_names,
+        "held_potion_names": held_potion_names,
         "potions_full": state.are_potions_full(),
+        "run_memory_summary": _build_run_memory_summary(
+            game_state=game_state,
+            deck_profile=deck_profile,
+            relic_names=relic_names,
+            held_potion_names=held_potion_names,
+        ),
     }
+
+
+def _build_run_id(game_state: dict[str, Any]) -> str:
+    character_class = str(game_state.get("class", "unknown")).strip().lower()
+    seed = str(game_state.get("seed", "unknown")).strip().lower()
+    return f"{character_class}:{seed}"
+
+
+def _build_run_memory_summary(
+        game_state: dict[str, Any],
+        deck_profile: dict[str, Any],
+        relic_names: list[str],
+        held_potion_names: list[str],
+) -> str:
+    character_class = str(game_state.get("class", "unknown"))
+    floor = game_state.get("floor", "unknown")
+    act = game_state.get("act", "unknown")
+    current_hp = game_state.get("current_hp", "unknown")
+    max_hp = game_state.get("max_hp", "unknown")
+    gold = game_state.get("gold", "unknown")
+    total_cards = deck_profile.get("total_cards", 0)
+    type_counts = deck_profile.get("type_counts", {})
+    upgraded_cards = deck_profile.get("upgraded_cards", 0)
+
+    dominant_type = "UNKNOWN"
+    if isinstance(type_counts, dict) and type_counts:
+        dominant_type = str(max(type_counts.items(), key=lambda item: item[1])[0])
+
+    relic_preview = ", ".join(relic_names[:3]) if relic_names else "none"
+    filled_potions = len([name for name in held_potion_names if str(name).strip().lower() != "potion slot"])
+
+    return (
+        f"{character_class} on Act {act} Floor {floor} at HP {current_hp}/{max_hp} with {gold} gold, "
+        f"{total_cards} cards ({dominant_type}-leaning, {upgraded_cards} upgraded), "
+        f"relics: {relic_preview}, held potions: {filled_potions}."
+    )
 
 
 def _build_summary_cache_key(state: GameState) -> str:

@@ -27,6 +27,8 @@ class TestMapLlmProviderPrompt(unittest.TestCase):
                 "relic_names": ["Burning Blood"],
                 "held_potion_names": [],
                 "potions_full": False,
+                "run_memory_summary": "IRONCLAD on Act 1 Floor 0 at HP 80/80 with 99 gold.",
+                "recent_llm_decisions": "A1 F0 EventHandler -> choose 0 (0.91, free value)",
                 "deck_profile": {"total_cards": 11, "type_counts": {"ATTACK": 6, "SKILL": 5}},
                 "next_nodes": [{"symbol": "M", "x": 0, "y": 0}, {"symbol": "M", "x": 6, "y": 0}],
                 "boss_available": False,
@@ -58,6 +60,8 @@ class TestMapLlmProviderPrompt(unittest.TestCase):
         self.assertIn("Choice path overviews (one per choice, worst to best):", prompt)
         self.assertIn("Sorted path summaries (worst to best):", prompt)
         self.assertIn('"choice_label": "x=6"', prompt)
+        self.assertIn("Run memory summary: IRONCLAD on Act 1 Floor 0 at HP 80/80 with 99 gold.", prompt)
+        self.assertIn("Recent LLM decisions: A1 F0 EventHandler -> choose 0 (0.91, free value)", prompt)
         self.assertIn('Current relics: ["Burning Blood"]', prompt)
         self.assertIn("Current position: 0_-1", prompt)
 

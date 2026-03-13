@@ -15,6 +15,8 @@ Choices: {choice_list}
 Floor: {floor}, Act: {act}, Gold: {gold}, HP: {current_hp}/{max_hp}
 Room type: {room_type}
 Class: {character_class}, Ascension: {ascension_level}, Act boss: {act_boss}
+Run memory summary: {run_memory_summary}
+Recent LLM decisions: {recent_llm_decisions}
 Has removable curse: {has_removable_curse}
 Deck size: {deck_size}
 Deck profile: {deck_profile}

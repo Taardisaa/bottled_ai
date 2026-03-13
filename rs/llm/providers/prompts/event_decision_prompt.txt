@@ -13,4 +13,6 @@ Available commands: {available_commands}
 Choices: {choice_list}
 Event: {event_name}
 Floor: {floor}, Act: {act}, HP: {current_hp}/{max_hp}, Gold: {gold}
+Run memory summary: {run_memory_summary}
+Recent LLM decisions: {recent_llm_decisions}
 Extras: {extras}

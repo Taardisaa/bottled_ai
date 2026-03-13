@@ -110,6 +110,8 @@ class ShopPurchaseLlmProvider:
         relic_names = context.extras.get("relic_names", [])
         held_potion_names = context.extras.get("held_potion_names", [])
         potions_full = context.extras.get("potions_full", False)
+        run_memory_summary = context.extras.get("run_memory_summary", "")
+        recent_llm_decisions = context.extras.get("recent_llm_decisions", "none")
         purge_cost = context.extras.get("purge_cost", "unknown")
         purge_available = context.extras.get("purge_available", False)
         offer_summaries = context.extras.get("offer_summaries", {})
@@ -131,6 +133,8 @@ class ShopPurchaseLlmProvider:
             has_removable_curse=removable_curse,
             deck_size=deck_size,
             deck_profile=json.dumps(deck_profile, sort_keys=True),
+            run_memory_summary=run_memory_summary,
+            recent_llm_decisions=recent_llm_decisions,
             relic_names=json.dumps(relic_names, sort_keys=True),
             held_potion_names=json.dumps(held_potion_names, sort_keys=True),
             potions_full=potions_full,

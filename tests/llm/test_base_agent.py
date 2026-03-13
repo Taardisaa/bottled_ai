@@ -194,6 +194,34 @@ class TestBaseAgent(unittest.TestCase):
         self.assertFalse(decision_one_retry.fallback_recommended)
         self.assertEqual("choose 0", decision_one_retry.proposed_command)
 
+    def test_orchestrator_injects_recent_llm_decisions_for_same_run(self):
+        class MemoryAwareAgent(BaseAgent):
+            def __init__(self):
+                super().__init__("memory_aware")
+                self.seen_summaries = []
+
+            def _decide(self, context):
+                self.seen_summaries.append(context.extras.get("recent_llm_decisions"))
+                return {"proposed_command": "choose 0", "confidence": 1.0}
+
+        agent = MemoryAwareAgent()
+        orchestrator = AIPlayerAgent(config=LlmConfig(enabled=True, telemetry_enabled=False))
+        orchestrator.register_agent("EventHandler", agent)
+        context = AgentContext(
+            handler_name="EventHandler",
+            screen_type="EVENT",
+            available_commands=["choose"],
+            choice_list=["a"],
+            game_state={"floor": 5, "act": 1},
+            extras={"run_id": "watcher:seed1"},
+        )
+
+        orchestrator.decide("EventHandler", context)
+        orchestrator.decide("EventHandler", context)
+
+        self.assertEqual("none", agent.seen_summaries[0])
+        self.assertIn("EventHandler -> choose 0", agent.seen_summaries[1])
+
 
 if __name__ == "__main__":
     unittest.main()

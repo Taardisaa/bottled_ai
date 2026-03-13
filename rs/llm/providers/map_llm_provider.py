@@ -109,6 +109,8 @@ class MapLlmProvider:
             ascension_level=context.game_state.get("ascension_level", "unknown"),
             act_boss=context.game_state.get("act_boss", "unknown"),
             current_position=context.game_state.get("current_position", "unknown"),
+            run_memory_summary=context.extras.get("run_memory_summary", ""),
+            recent_llm_decisions=context.extras.get("recent_llm_decisions", "none"),
             relic_names=json.dumps(context.extras.get("relic_names", []), sort_keys=True),
             held_potion_names=json.dumps(context.extras.get("held_potion_names", []), sort_keys=True),
             potions_full=context.extras.get("potions_full", False),
