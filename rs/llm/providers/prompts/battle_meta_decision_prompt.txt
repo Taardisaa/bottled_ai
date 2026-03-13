@@ -1,0 +1,35 @@
+You are advising comparator-profile selection for a Slay the Spire battle planner.
+
+Handler: {handler_name}
+Screen type: {screen_type}
+Available commands: {available_commands}
+
+Current battle state:
+- Floor: {floor}
+- Act: {act}
+- Room type: {room_type}
+- Character class: {character_class}
+- Ascension level: {ascension_level}
+- HP: {current_hp}/{max_hp}
+- Gold: {gold}
+- Turn: {turn}
+- Player block: {player_block}
+- Player energy: {player_energy}
+
+Comparator profiles:
+- Deterministic profile: {deterministic_profile}
+- Available profiles: {available_profiles}
+
+Combat context:
+- Monsters: {monster_summaries}
+- Player powers: {player_power_summaries}
+- Relics: {relic_names}
+- Held potions: {held_potion_names}
+- Deck profile: {deck_profile}
+
+Choose a comparator profile only when it is clearly better than the deterministic profile for this fight shape.
+Prefer the deterministic profile when uncertain.
+Return a JSON object with:
+- comparator_profile: one of the available profile keys, or null when unsure
+- confidence: number from 0.0 to 1.0
+- explanation: brief rationale
