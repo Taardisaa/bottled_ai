@@ -1,0 +1,29 @@
+You are selecting a Slay the Spire map command.
+Return ONLY a JSON object with keys:
+proposed_command (string or null), confidence (0..1), explanation (short string).
+
+Rules:
+- proposed_command must be one valid command from available_commands.
+- Prefer 'choose <index>' where index references choice_list.
+- Use the deterministic path summaries first; only deviate when the path tradeoff is plausibly better under uncertainty.
+- Favor survivability when HP is low or elites are risky.
+- Use null when no safe decision.
+
+Handler: {handler_name}
+Screen: {screen_type}
+Available commands: {available_commands}
+Choices: {choice_list}
+Floor: {floor}, Act: {act}, HP: {current_hp}/{max_hp}, Gold: {gold}
+Room type: {room_type}
+Class: {character_class}, Ascension: {ascension_level}, Act boss: {act_boss}
+Current position: {current_position}
+Current relics: {relic_names}
+Held potions: {held_potion_names}
+Potion slots full: {potions_full}
+Deck profile: {deck_profile}
+Next nodes: {next_nodes}
+Boss available: {boss_available}
+First node already chosen: {first_node_chosen}
+Deterministic best command: {deterministic_best_command}
+Choice path overviews (one per choice, worst to best): {choice_path_overviews}
+Sorted path summaries (worst to best): {sorted_path_summaries}

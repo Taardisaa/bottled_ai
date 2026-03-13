@@ -2,6 +2,7 @@ from rs.llm.agents.base_agent import AgentContext, AgentDecision, BaseAgent
 from rs.llm.agents.card_reward_advisor_agent import CardRewardAdvisorAgent
 from rs.llm.agents.event_advisor_agent import EventAdvisorAgent
 from rs.llm.agents.langgraph_base_agent import LangGraphBaseAgent
+from rs.llm.agents.map_advisor_agent import MapAdvisorAgent
 from rs.llm.agents.shop_purchase_advisor_agent import ShopPurchaseAdvisorAgent
 from rs.llm.benchmark_suite import (
     FIXED_LLM_BENCHMARK_SUITE,
@@ -25,6 +26,7 @@ __all__ = [
     "EventAdvisorAgent",
     "FIXED_LLM_BENCHMARK_SUITE",
     "LangGraphBaseAgent",
+    "MapAdvisorAgent",
     "LlmBenchmarkCase",
     "ShopPurchaseAdvisorAgent",
     "LlmConfig",

@@ -1,9 +1,13 @@
+import os
 from typing import List
 
 from presentation_config import presentation_mode, p_delay, slow_pathing
 from rs.game.map import Map
 from rs.game.path import PathHandlerConfig
 from rs.game.screen_type import ScreenType
+from rs.llm.integration.map_context import build_map_agent_context
+from rs.llm.orchestrator import AIPlayerAgent
+from rs.llm.runtime import get_event_orchestrator
 from rs.machine.command import Command
 from rs.machine.handlers.handler import Handler
 from rs.machine.handlers.handler_action import HandlerAction
@@ -31,13 +35,20 @@ default_config = PathHandlerConfig(
 
 class CommonMapHandler(Handler):
 
-    def __init__(self, config: PathHandlerConfig = None):
+    def __init__(self, config: PathHandlerConfig = None, advisor_orchestrator: AIPlayerAgent | None = None):
         self.config: PathHandlerConfig = default_config if config is None else config
+        self.advisor_orchestrator = advisor_orchestrator
 
     def can_handle(self, state: GameState) -> bool:
         return state.screen_type() == ScreenType.MAP.value and state.has_command(Command.CHOOSE)
 
     def handle(self, state: GameState) -> HandlerAction:
+        advisor_choice = self.find_advisor_choice(state)
+        if advisor_choice is not None:
+            if presentation_mode or slow_pathing:
+                return HandlerAction(commands=[p_delay, advisor_choice])
+            return HandlerAction(commands=[advisor_choice])
+
         # Get the math and paths set up
         n = state.game_state()["screen_state"]["current_node"]
         current_position = str(n["x"]) + "_" + str(n["y"])
@@ -51,3 +62,20 @@ class CommonMapHandler(Handler):
             return HandlerAction(
                 commands=[p_delay, "choose " + str(game_map.get_path_choice_from_choices(state.get_choice_list()))])
         return HandlerAction(commands=["choose " + str(game_map.get_path_choice_from_choices(state.get_choice_list()))])
+
+    def find_advisor_choice(self, state: GameState) -> str | None:
+        if self.advisor_orchestrator is None and os.environ.get("LLM_ENABLED", "").strip().lower() in {
+            "0", "false", "no", "off"
+        }:
+            return None
+
+        orchestrator = self.advisor_orchestrator if self.advisor_orchestrator is not None else get_event_orchestrator()
+        context = build_map_agent_context(state, type(self).__name__, self.config)
+        decision = orchestrator.decide("MapHandler", context)
+        if decision is None or decision.fallback_recommended or decision.proposed_command is None:
+            return None
+
+        proposed = decision.proposed_command.strip().lower()
+        if not proposed.startswith("choose "):
+            return None
+        return proposed
