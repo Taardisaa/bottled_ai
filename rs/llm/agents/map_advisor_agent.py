@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Protocol
 
-from rs.llm.agents.base_agent import AgentContext, BaseAgent
+from rs.llm.agents.base_agent import AgentContext
+from rs.llm.agents.memory_langgraph_agent import MemoryAugmentedLangGraphAgent
 from rs.llm.providers.map_llm_provider import MapLlmProposal, MapLlmProvider
 
 
@@ -11,7 +12,7 @@ class MapProposalProvider(Protocol):
         ...
 
 
-class MapAdvisorAgent(BaseAgent):
+class MapAdvisorAgent(MemoryAugmentedLangGraphAgent):
     """Map advisor anchored on deterministic path scoring plus conservative overrides."""
 
     def __init__(
@@ -22,35 +23,41 @@ class MapAdvisorAgent(BaseAgent):
         super().__init__(name="map_advisor", timeout_ms=timeout_ms)
         self._llm_provider: MapProposalProvider = MapLlmProvider() if llm_provider is None else llm_provider
 
-    def _decide(self, context: AgentContext) -> Dict[str, Any]:
-        proposal = self._llm_provider.propose(context)
-        if proposal.proposed_command is not None:
-            metadata = {
-                "phase": "phase_3_map_advisor",
-                "deterministic_best_command": context.extras.get("deterministic_best_command"),
-            }
-            metadata.update(proposal.metadata)
-            return {
-                "proposed_command": proposal.proposed_command,
-                "confidence": proposal.confidence,
-                "explanation": proposal.explanation,
-                "required_tools_used": ["deterministic_path_scores", "llm_map_advisor"],
-                "fallback_recommended": False,
-                "metadata": metadata,
-            }
+    def propose_with_context(self, context: AgentContext) -> MapLlmProposal:
+        return self._llm_provider.propose(context)
 
+    def build_success_payload(self, context: AgentContext, proposal: MapLlmProposal) -> Dict[str, Any]:
+        metadata = {
+            "phase": "phase_3_map_advisor",
+            "deterministic_best_command": context.extras.get("deterministic_best_command"),
+            "graph_runtime": "langgraph",
+            "graph_nodes": self.graph_node_names(),
+        }
+        metadata.update(proposal.metadata)
+        return {
+            "proposed_command": proposal.proposed_command,
+            "confidence": proposal.confidence,
+            "explanation": proposal.explanation,
+            "required_tools_used": ["deterministic_path_scores", "llm_map_advisor", "langgraph_workflow"],
+            "fallback_recommended": False,
+            "metadata": metadata,
+        }
+
+    def build_fallback_payload(self, context: AgentContext, proposal: MapLlmProposal) -> Dict[str, Any]:
         proposed_command = _default_map_decision_provider(context)
         metadata = {
             "phase": "phase_3_map_advisor",
             "deterministic_best_command": context.extras.get("deterministic_best_command"),
             "fallback_reason": "llm_no_decision",
+            "graph_runtime": "langgraph",
+            "graph_nodes": self.graph_node_names(),
         }
         metadata.update(proposal.metadata)
         return {
             "proposed_command": proposed_command,
             "confidence": 0.7 if proposed_command is not None else 0.0,
             "explanation": "rule_based_map_policy" if proposed_command is not None else proposal.explanation,
-            "required_tools_used": ["deterministic_path_scores"],
+            "required_tools_used": ["deterministic_path_scores", "langgraph_workflow"] if proposed_command is not None else [],
             "fallback_recommended": proposed_command is None,
             "metadata": metadata,
         }

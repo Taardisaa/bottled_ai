@@ -1,35 +1,41 @@
 import unittest
 
 from rs.llm.agents.base_agent import AgentContext
+from rs.llm.agents.langgraph_base_agent import LangGraphBaseAgent
 from rs.llm.agents.map_advisor_agent import MapAdvisorAgent
+from rs.llm.agents.memory_langgraph_agent import MemoryAugmentedLangGraphAgent
 from rs.llm.providers.map_llm_provider import MapLlmProposal
 
 
 class StubMapProvider:
     def __init__(self, proposal: MapLlmProposal):
         self._proposal = proposal
+        self.seen_recent_decisions = []
 
     def propose(self, context: AgentContext) -> MapLlmProposal:
+        self.seen_recent_decisions.append(context.extras.get("recent_llm_decisions"))
         return self._proposal
 
 
 class TestMapAdvisorAgent(unittest.TestCase):
     def test_map_agent_uses_llm_proposal(self):
-        agent = MapAdvisorAgent(
-            llm_provider=StubMapProvider(
-                MapLlmProposal(
-                    proposed_command="choose 2",
-                    confidence=0.81,
-                    explanation="take the greedier path",
-                )
+        provider = StubMapProvider(
+            MapLlmProposal(
+                proposed_command="choose 2",
+                confidence=0.81,
+                explanation="take the greedier path",
             )
         )
+        agent = MapAdvisorAgent(llm_provider=provider)
         context = AgentContext(
             handler_name="CommonMapHandler",
             screen_type="MAP",
             available_commands=["choose", "return"],
             choice_list=["x=0", "x=3", "x=4", "x=6"],
-            extras={"deterministic_best_command": "choose 3"},
+            extras={
+                "deterministic_best_command": "choose 3",
+                "recent_llm_decisions": "A1 F8 ShopPurchaseHandler -> choose 1 (0.74, remove curse)",
+            },
         )
 
         decision = agent.decide(context)
@@ -37,6 +43,14 @@ class TestMapAdvisorAgent(unittest.TestCase):
         self.assertEqual("choose 2", decision.proposed_command)
         self.assertFalse(decision.fallback_recommended)
         self.assertIn("deterministic_path_scores", decision.required_tools_used)
+        self.assertIn("langgraph_workflow", decision.required_tools_used)
+        self.assertEqual("langgraph", decision.metadata["graph_runtime"])
+        self.assertEqual(
+            "A1 F8 ShopPurchaseHandler -> choose 1 (0.74, remove curse)",
+            provider.seen_recent_decisions[-1],
+        )
+        self.assertIsInstance(agent, LangGraphBaseAgent)
+        self.assertIsInstance(agent, MemoryAugmentedLangGraphAgent)
 
     def test_map_agent_uses_rule_based_deterministic_choice_when_llm_has_no_decision(self):
         agent = MapAdvisorAgent(
