@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from pathlib import Path
 from typing import Any, Dict
 
@@ -97,8 +98,21 @@ class ShopPurchaseLlmProvider:
         floor = context.game_state.get("floor", "unknown")
         act = context.game_state.get("act", "unknown")
         gold = context.game_state.get("gold", "unknown")
+        current_hp = context.game_state.get("current_hp", "unknown")
+        max_hp = context.game_state.get("max_hp", "unknown")
+        room_type = context.game_state.get("room_type", "unknown")
+        character_class = context.game_state.get("character_class", "unknown")
+        ascension_level = context.game_state.get("ascension_level", "unknown")
+        act_boss = context.game_state.get("act_boss", "unknown")
         removable_curse = context.extras.get("has_removable_curse", False)
         deck_size = context.extras.get("deck_size", "unknown")
+        deck_profile = context.extras.get("deck_profile", {})
+        relic_names = context.extras.get("relic_names", [])
+        held_potion_names = context.extras.get("held_potion_names", [])
+        potions_full = context.extras.get("potions_full", False)
+        purge_cost = context.extras.get("purge_cost", "unknown")
+        purge_available = context.extras.get("purge_available", False)
+        offer_summaries = context.extras.get("offer_summaries", {})
 
         return PROMPT_TEMPLATE.format(
             handler_name=context.handler_name,
@@ -108,6 +122,21 @@ class ShopPurchaseLlmProvider:
             floor=floor,
             act=act,
             gold=gold,
+            current_hp=current_hp,
+            max_hp=max_hp,
+            room_type=room_type,
+            character_class=character_class,
+            ascension_level=ascension_level,
+            act_boss=act_boss,
             has_removable_curse=removable_curse,
             deck_size=deck_size,
+            deck_profile=json.dumps(deck_profile, sort_keys=True),
+            relic_names=json.dumps(relic_names, sort_keys=True),
+            held_potion_names=json.dumps(held_potion_names, sort_keys=True),
+            potions_full=potions_full,
+            purge_cost=purge_cost,
+            purge_available=purge_available,
+            shop_card_offers=json.dumps(offer_summaries.get("cards", []), sort_keys=True),
+            shop_relic_offers=json.dumps(offer_summaries.get("relics", []), sort_keys=True),
+            shop_potion_offers=json.dumps(offer_summaries.get("potions", []), sort_keys=True),
         )

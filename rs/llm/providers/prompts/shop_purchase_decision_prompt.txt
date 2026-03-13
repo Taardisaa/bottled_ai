@@ -12,6 +12,17 @@ Handler: {handler_name}
 Screen: {screen_type}
 Available commands: {available_commands}
 Choices: {choice_list}
-Floor: {floor}, Act: {act}, Gold: {gold}
+Floor: {floor}, Act: {act}, Gold: {gold}, HP: {current_hp}/{max_hp}
+Room type: {room_type}
+Class: {character_class}, Ascension: {ascension_level}, Act boss: {act_boss}
 Has removable curse: {has_removable_curse}
 Deck size: {deck_size}
+Deck profile: {deck_profile}
+Current relics: {relic_names}
+Held potions: {held_potion_names}
+Potion slots full: {potions_full}
+Purge available: {purge_available}
+Purge cost: {purge_cost}
+Shop card offers: {shop_card_offers}
+Shop relic offers: {shop_relic_offers}
+Shop potion offers: {shop_potion_offers}
