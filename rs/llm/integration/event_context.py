@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from rs.game.event import Event
 from rs.llm.agents.base_agent import AgentContext
+from rs.llm.state_summary_cache import get_cached_run_summary
 from rs.machine.state import GameState
 
 
@@ -14,6 +15,7 @@ def build_event_agent_context(state: GameState, handler_name: str) -> AgentConte
     event = state.get_event()
     event_name = event.value if isinstance(event, Event) else str(event)
     game_state = state.game_state()
+    run_summary = get_cached_run_summary(state)
 
     return AgentContext(
         handler_name=handler_name,
@@ -29,7 +31,7 @@ def build_event_agent_context(state: GameState, handler_name: str) -> AgentConte
             "gold": game_state.get("gold"),
         },
         extras={
-            "relic_names": [relic["name"] for relic in state.get_relics()],
-            "deck_size": len(state.deck.cards),
+            "relic_names": run_summary["relic_names"],
+            "deck_size": run_summary["deck_size"],
         },
     )

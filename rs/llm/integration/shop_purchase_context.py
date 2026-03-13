@@ -3,47 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from rs.llm.agents.base_agent import AgentContext
+from rs.llm.state_summary_cache import get_cached_run_summary
 from rs.machine.state import GameState
-
-
-def _build_deck_profile(state: GameState) -> dict[str, Any]:
-    type_counts: dict[str, int] = {}
-    cost_buckets = {
-        "zero_cost": 0,
-        "one_cost": 0,
-        "two_cost": 0,
-        "three_plus_cost": 0,
-        "x_cost": 0,
-        "unplayable": 0,
-    }
-    upgraded_cards = 0
-
-    for card in state.deck.cards:
-        type_key = card.type.value
-        type_counts[type_key] = type_counts.get(type_key, 0) + 1
-
-        if card.cost == -1:
-            cost_buckets["x_cost"] += 1
-        elif card.cost < 0:
-            cost_buckets["unplayable"] += 1
-        elif card.cost == 0:
-            cost_buckets["zero_cost"] += 1
-        elif card.cost == 1:
-            cost_buckets["one_cost"] += 1
-        elif card.cost == 2:
-            cost_buckets["two_cost"] += 1
-        else:
-            cost_buckets["three_plus_cost"] += 1
-
-        if card.upgrades > 0:
-            upgraded_cards += 1
-
-    return {
-        "total_cards": len(state.deck.cards),
-        "type_counts": type_counts,
-        "cost_buckets": cost_buckets,
-        "upgraded_cards": upgraded_cards,
-    }
 
 
 def _build_shop_offer_summaries(screen_state: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -102,6 +63,7 @@ def build_shop_purchase_agent_context(state: GameState, handler_name: str) -> Ag
     game_state = state.game_state()
     screen_state = state.screen_state()
     offer_summaries = _build_shop_offer_summaries(screen_state)
+    run_summary = get_cached_run_summary(state)
 
     return AgentContext(
         handler_name=handler_name,
@@ -121,11 +83,11 @@ def build_shop_purchase_agent_context(state: GameState, handler_name: str) -> Ag
         },
         extras={
             "has_removable_curse": state.deck.contains_curses_we_can_remove(),
-            "deck_size": len(state.deck.cards),
-            "deck_profile": _build_deck_profile(state),
-            "relic_names": [relic["name"] for relic in state.get_relics()],
-            "held_potion_names": state.get_held_potion_names(),
-            "potions_full": state.are_potions_full(),
+            "deck_size": run_summary["deck_size"],
+            "deck_profile": run_summary["deck_profile"],
+            "relic_names": run_summary["relic_names"],
+            "held_potion_names": run_summary["held_potion_names"],
+            "potions_full": run_summary["potions_full"],
             "purge_cost": screen_state.get("purge_cost"),
             "purge_available": bool(screen_state.get("purge_available", False)),
             "offer_summaries": offer_summaries,

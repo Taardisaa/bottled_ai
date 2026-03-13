@@ -3,42 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from rs.llm.agents.base_agent import AgentContext
+from rs.llm.state_summary_cache import get_cached_run_summary
 from rs.machine.state import GameState
-
-
-def _build_deck_profile(state: GameState) -> dict[str, Any]:
-    type_counts: dict[str, int] = {}
-    cost_buckets = {
-        "zero_cost": 0,
-        "one_cost": 0,
-        "two_cost": 0,
-        "three_plus_cost": 0,
-        "x_cost": 0,
-        "unplayable": 0,
-    }
-
-    for card in state.deck.cards:
-        type_key = card.type.value
-        type_counts[type_key] = type_counts.get(type_key, 0) + 1
-
-        if card.cost == -1:
-            cost_buckets["x_cost"] += 1
-        elif card.cost < 0:
-            cost_buckets["unplayable"] += 1
-        elif card.cost == 0:
-            cost_buckets["zero_cost"] += 1
-        elif card.cost == 1:
-            cost_buckets["one_cost"] += 1
-        elif card.cost == 2:
-            cost_buckets["two_cost"] += 1
-        else:
-            cost_buckets["three_plus_cost"] += 1
-
-    return {
-        "total_cards": len(state.deck.cards),
-        "type_counts": type_counts,
-        "cost_buckets": cost_buckets,
-    }
 
 
 def _build_monster_summaries(state: GameState) -> list[dict[str, Any]]:
@@ -88,6 +54,7 @@ def build_battle_meta_agent_context(
     game_state = state.game_state()
     combat_state = state.combat_state() or {}
     player = combat_state.get("player", {})
+    run_summary = get_cached_run_summary(state)
     return AgentContext(
         handler_name=handler_name,
         screen_type=state.screen_type(),
@@ -111,8 +78,8 @@ def build_battle_meta_agent_context(
             "available_profiles": available_profiles,
             "monster_summaries": _build_monster_summaries(state),
             "player_power_summaries": _build_player_power_summaries(state),
-            "relic_names": [relic["name"] for relic in state.get_relics()],
-            "held_potion_names": state.get_held_potion_names(),
-            "deck_profile": _build_deck_profile(state),
+            "relic_names": run_summary["relic_names"],
+            "held_potion_names": run_summary["held_potion_names"],
+            "deck_profile": run_summary["deck_profile"],
         },
     )

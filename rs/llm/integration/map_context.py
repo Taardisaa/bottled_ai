@@ -5,42 +5,8 @@ from typing import Any
 from rs.game.map import Map
 from rs.game.path import PathHandlerConfig
 from rs.llm.agents.base_agent import AgentContext
+from rs.llm.state_summary_cache import get_cached_run_summary
 from rs.machine.state import GameState
-
-
-def _build_deck_profile(state: GameState) -> dict[str, Any]:
-    type_counts: dict[str, int] = {}
-    cost_buckets = {
-        "zero_cost": 0,
-        "one_cost": 0,
-        "two_cost": 0,
-        "three_plus_cost": 0,
-        "x_cost": 0,
-        "unplayable": 0,
-    }
-
-    for card in state.deck.cards:
-        type_key = card.type.value
-        type_counts[type_key] = type_counts.get(type_key, 0) + 1
-
-        if card.cost == -1:
-            cost_buckets["x_cost"] += 1
-        elif card.cost < 0:
-            cost_buckets["unplayable"] += 1
-        elif card.cost == 0:
-            cost_buckets["zero_cost"] += 1
-        elif card.cost == 1:
-            cost_buckets["one_cost"] += 1
-        elif card.cost == 2:
-            cost_buckets["two_cost"] += 1
-        else:
-            cost_buckets["three_plus_cost"] += 1
-
-    return {
-        "total_cards": len(state.deck.cards),
-        "type_counts": type_counts,
-        "cost_buckets": cost_buckets,
-    }
 
 
 def _build_sorted_path_summaries(
@@ -127,6 +93,7 @@ def build_map_agent_context(
     choice_path_overviews = _build_choice_path_overviews(sorted_path_summaries)
     deterministic_choice_index = game_map.get_path_choice_from_choices(state.get_choice_list())
     deterministic_choice_command = f"choose {deterministic_choice_index}"
+    run_summary = get_cached_run_summary(state)
 
     game_state = state.game_state()
     screen_state = state.screen_state()
@@ -148,10 +115,10 @@ def build_map_agent_context(
             "current_position": current_position,
         },
         extras={
-            "deck_profile": _build_deck_profile(state),
-            "relic_names": [relic["name"] for relic in state.get_relics()],
-            "held_potion_names": state.get_held_potion_names(),
-            "potions_full": state.are_potions_full(),
+            "deck_profile": run_summary["deck_profile"],
+            "relic_names": run_summary["relic_names"],
+            "held_potion_names": run_summary["held_potion_names"],
+            "potions_full": run_summary["potions_full"],
             "next_nodes": screen_state.get("next_nodes", []),
             "boss_available": bool(screen_state.get("boss_available", False)),
             "first_node_chosen": bool(screen_state.get("first_node_chosen", False)),
