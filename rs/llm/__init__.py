@@ -8,6 +8,7 @@ from rs.llm.benchmark_suite import (
     LlmBenchmarkCase,
     get_fixed_llm_benchmark_suite,
     group_suite_by_strategy_key,
+    load_benchmark_case_state,
     summarize_benchmark_suite,
 )
 from rs.llm.config import LlmConfig, load_llm_config
@@ -33,6 +34,7 @@ __all__ = [
     "get_event_orchestrator",
     "get_fixed_llm_benchmark_suite",
     "group_suite_by_strategy_key",
+    "load_benchmark_case_state",
     "summarize_benchmark_suite",
     "ValidationResult",
     "validate_command",

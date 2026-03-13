@@ -9,6 +9,8 @@ from typing import Any, Iterable, Sequence
 from definitions import ROOT_DIR
 from rs.helper.seed import get_seed_string
 from rs.machine.character import Character
+from rs.machine.state import GameState
+from rs.machine.the_bots_memory_book import TheBotsMemoryBook
 
 
 _DEFAULT_STRATEGY_BY_CHARACTER = {
@@ -199,6 +201,16 @@ def _build_case(spec: _CaseSpec) -> LlmBenchmarkCase:
 
 
 FIXED_LLM_BENCHMARK_SUITE: tuple[LlmBenchmarkCase, ...] = tuple(_build_case(spec) for spec in _SUITE_SPECS)
+
+
+def load_benchmark_case_state(
+        case: LlmBenchmarkCase,
+        memory_book: TheBotsMemoryBook | None = None,
+) -> GameState:
+    selected_memory_book = TheBotsMemoryBook.new_default() if memory_book is None else memory_book
+    path = Path(ROOT_DIR) / case.fixture_path
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return GameState(payload, selected_memory_book)
 
 
 def get_fixed_llm_benchmark_suite(
