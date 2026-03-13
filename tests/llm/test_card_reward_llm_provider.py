@@ -16,17 +16,34 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
                 "floor": 10,
                 "act": 1,
                 "room_phase": "COMPLETE",
+                "room_type": "MonsterRoom",
                 "current_hp": 50,
                 "max_hp": 80,
+                "character_class": "IRONCLAD",
+                "ascension_level": 5,
+                "act_boss": "Hexaghost",
             },
             extras={
                 "deck_size": 15,
                 "relic_names": ["Vajra"],
+                "held_potion_names": ["strength potion"],
+                "potions_full": False,
                 "deck_card_name_counts": {"strike": 4, "defend": 4, "pommel strike": 1},
                 "deck_card_entries": [
                     {"name": "pommel strike+1", "upgrade_times": 1, "count": 1},
                     {"name": "strike", "upgrade_times": 0, "count": 4},
                 ],
+                "deck_profile": {
+                    "total_cards": 15,
+                    "type_counts": {"ATTACK": 7, "SKILL": 7, "POWER": 1},
+                    "cost_buckets": {"one_cost": 10, "two_cost": 3, "zero_cost": 2},
+                    "upgraded_cards": 2,
+                },
+                "choice_card_summaries": [
+                    {"index": 0, "name": "pommel strike", "type": "ATTACK", "rarity": "COMMON", "cost": 1},
+                    {"index": 1, "name": "cleave", "type": "ATTACK", "rarity": "COMMON", "cost": 1},
+                ],
+                "reward_screen_flags": {"bowl_available": True, "skip_available": True},
             },
         )
 
@@ -44,6 +61,12 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
 
         self.assertIn("Card DB status: available", prompt)
         self.assertIn("Choice card details (stsdb):", prompt)
+        self.assertIn("Class: IRONCLAD, Ascension: 5, Act boss: Hexaghost", prompt)
+        self.assertIn("Deck profile:", prompt)
+        self.assertIn('"upgraded_cards": 2', prompt)
+        self.assertIn("Choice card summaries:", prompt)
+        self.assertIn('"name": "pommel strike"', prompt)
+        self.assertIn('Reward screen flags: {"bowl_available": true, "skip_available": true}', prompt)
         self.assertIn('"name": "pommel strike"', prompt)
         self.assertIn("Deck card counts:", prompt)
 

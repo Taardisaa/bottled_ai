@@ -101,9 +101,18 @@ class CardRewardLlmProvider:
         hp = context.game_state.get("current_hp", "unknown")
         max_hp = context.game_state.get("max_hp", "unknown")
         room_phase = context.game_state.get("room_phase", "unknown")
+        room_type = context.game_state.get("room_type", "unknown")
+        character_class = context.game_state.get("character_class", "unknown")
+        ascension_level = context.game_state.get("ascension_level", "unknown")
+        act_boss = context.game_state.get("act_boss", "unknown")
         deck_size = context.extras.get("deck_size", "unknown")
         relic_names = context.extras.get("relic_names", [])
+        held_potion_names = context.extras.get("held_potion_names", [])
+        potions_full = context.extras.get("potions_full", False)
         deck_card_counts = context.extras.get("deck_card_name_counts", {})
+        deck_profile = context.extras.get("deck_profile", {})
+        choice_card_summaries = context.extras.get("choice_card_summaries", [])
+        reward_screen_flags = context.extras.get("reward_screen_flags", {})
         card_details = self._build_card_details(context)
 
         return PROMPT_TEMPLATE.format(
@@ -116,9 +125,18 @@ class CardRewardLlmProvider:
             act=act,
             current_hp=hp,
             max_hp=max_hp,
+            room_type=room_type,
+            character_class=character_class,
+            ascension_level=ascension_level,
+            act_boss=act_boss,
             deck_size=deck_size,
-            relic_names=relic_names,
-            deck_card_counts=deck_card_counts,
+            relic_names=json.dumps(relic_names, sort_keys=True),
+            held_potion_names=json.dumps(held_potion_names, sort_keys=True),
+            potions_full=potions_full,
+            deck_card_counts=json.dumps(deck_card_counts, sort_keys=True),
+            deck_profile=json.dumps(deck_profile, sort_keys=True),
+            choice_card_summaries=json.dumps(choice_card_summaries, sort_keys=True),
+            reward_screen_flags=json.dumps(reward_screen_flags, sort_keys=True),
             choice_card_details=json.dumps(card_details["choice"], sort_keys=True),
             deck_card_details=json.dumps(card_details["deck"], sort_keys=True),
             card_db_status="available",

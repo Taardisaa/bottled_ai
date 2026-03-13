@@ -30,6 +30,8 @@ class Config:
     anthropic_key: str = ""
     openrouter_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    llm_base_url: str = ""
+    llm_api_key: str = ""
     load_cache_options: dict[str, bool] = field(default_factory=lambda: {"llm_query": True})
     store_cache_options: dict[str, bool] = field(default_factory=lambda: {"llm_query": True})
 
@@ -53,6 +55,8 @@ def load_config(config_path: str | None = None, env_path: str | None = None) -> 
     openrouter_key = os.environ.get("OPENROUTER_API_KEY") or dotenv_values.get("OPENROUTER_API_KEY", "")
     openrouter_base_url = os.environ.get("OPENROUTER_BASE_URL") \
         or dotenv_values.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    llm_base_url = os.environ.get("LLM_BASE_URL") or dotenv_values.get("LLM_BASE_URL", "")
+    llm_api_key = os.environ.get("LLM_API_KEY") or dotenv_values.get("LLM_API_KEY", "")
 
     cache_values = values.get("cache", {})
     load_cache_options = dict(cache_values.get("load_options", {"llm_query": True}))
@@ -65,6 +69,8 @@ def load_config(config_path: str | None = None, env_path: str | None = None) -> 
         anthropic_key=str(anthropic_key),
         openrouter_key=str(openrouter_key),
         openrouter_base_url=str(openrouter_base_url),
+        llm_base_url=str(llm_base_url),
+        llm_api_key=str(llm_api_key),
         load_cache_options=load_cache_options,
         store_cache_options=store_cache_options,
     )

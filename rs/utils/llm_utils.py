@@ -35,12 +35,31 @@ def _is_openrouter_model(model: str) -> bool:
     return model.startswith("openrouter/")
 
 
+def _has_custom_base_url() -> bool:
+    return bool(config.llm_base_url.strip())
+
+
+def _normalize_model_for_litellm(model: str) -> str:
+    if not _has_custom_base_url():
+        return model
+
+    if model.startswith("hosted_vllm/") or model.startswith("openai/") or _is_openrouter_model(model):
+        return model
+
+    return f"hosted_vllm/{model}"
+
+
 def _litellm_completion_kwargs(model: str, temperature: float, **extra_kwargs: Any) -> Dict[str, Any]:
+    normalized_model = _normalize_model_for_litellm(model)
     kwargs: Dict[str, Any] = {
-        "model": model,
+        "model": normalized_model,
         "temperature": temperature,
     }
-    if _is_openrouter_model(model):
+    if _has_custom_base_url():
+        kwargs["api_base"] = config.llm_base_url
+        if config.llm_api_key:
+            kwargs["api_key"] = config.llm_api_key
+    elif _is_openrouter_model(model):
         kwargs["api_base"] = config.openrouter_base_url
         kwargs["api_key"] = config.openrouter_key or config.openai_key
     for key, value in extra_kwargs.items():
@@ -56,6 +75,13 @@ def _ensure_api_key_for_model(model: str) -> bool:
     Returns:
         True if the API key is available, False otherwise.
     """
+    if _has_custom_base_url():
+        set_env("OPENAI_BASE_URL", config.llm_base_url)
+        set_env("OPENAI_API_BASE", config.llm_base_url)
+        if config.llm_api_key:
+            set_env("OPENAI_API_KEY", config.llm_api_key)
+        return True
+
     # Determine provider from model name
     if _is_openrouter_model(model):
         config_key = config.openrouter_key or config.openai_key

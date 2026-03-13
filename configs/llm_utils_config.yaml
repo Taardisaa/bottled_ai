@@ -1,6 +1,9 @@
-fast_llm_model: gpt-5-mini
+# fast_llm_model: gpt-5-mini
+fast_llm_model: Qwen/Qwen3-14B
 # Use OpenRouter by setting fast_llm_model to openrouter/<provider>/<model>
 # Example: openrouter/openai/gpt-5-mini
+# For self-hosted OpenAI-compatible servers (e.g. vLLM), set LLM_BASE_URL in .env.
+# Optional: set LLM_API_KEY in .env when your endpoint requires auth.
 dataset_dir_path: dataset
 cache:
   load_options:

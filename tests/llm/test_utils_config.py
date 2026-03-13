@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import os
 from pathlib import Path
 
 from rs.utils.config import load_config
@@ -25,11 +26,31 @@ class TestUtilsConfig(unittest.TestCase):
                 "OPENAI_API_KEY=test-openai\n"
                 "ANTHROPIC_API_KEY=test-anthropic\n"
                 "OPENROUTER_API_KEY=test-openrouter\n"
-                "OPENROUTER_BASE_URL=https://openrouter.ai/api/v1\n",
+                "OPENROUTER_BASE_URL=https://openrouter.ai/api/v1\n"
+                "LLM_BASE_URL=http://127.0.0.1:8000/v1\n"
+                "LLM_API_KEY=test-local-secret\n",
                 encoding="utf-8",
             )
 
-            loaded = load_config(str(config_path), str(env_path))
+            env_keys = [
+                "OPENAI_API_KEY",
+                "ANTHROPIC_API_KEY",
+                "OPENROUTER_API_KEY",
+                "OPENROUTER_BASE_URL",
+                "LLM_BASE_URL",
+                "LLM_API_KEY",
+            ]
+            previous = {key: os.environ.get(key) for key in env_keys}
+            try:
+                for key in env_keys:
+                    os.environ.pop(key, None)
+                loaded = load_config(str(config_path), str(env_path))
+            finally:
+                for key, value in previous.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
 
             self.assertEqual("gpt-5", loaded.fast_llm_model)
             self.assertEqual("dataset_local", loaded.dataset_dir_path)
@@ -37,6 +58,8 @@ class TestUtilsConfig(unittest.TestCase):
             self.assertEqual("test-anthropic", loaded.anthropic_key)
             self.assertEqual("test-openrouter", loaded.openrouter_key)
             self.assertEqual("https://openrouter.ai/api/v1", loaded.openrouter_base_url)
+            self.assertEqual("http://127.0.0.1:8000/v1", loaded.llm_base_url)
+            self.assertEqual("test-local-secret", loaded.llm_api_key)
             self.assertFalse(loaded.get_load_cache_option("llm_query"))
             self.assertTrue(loaded.get_store_cache_option("llm_query"))
 

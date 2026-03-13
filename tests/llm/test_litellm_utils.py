@@ -18,6 +18,19 @@ class IntSchema(BaseModel):
 
 
 class TestLiteLlmUtils(unittest.TestCase):
+    def test_custom_base_url_prefixes_openai_provider(self):
+        original_base = llm_utils.config.llm_base_url
+        try:
+            llm_utils.config.llm_base_url = "http://127.0.0.1:8000/v1"
+            self.assertEqual("hosted_vllm/Qwen/Qwen3-14B", llm_utils._normalize_model_for_litellm("Qwen/Qwen3-14B"))
+            self.assertEqual("hosted_vllm/gpt-5-mini", llm_utils._normalize_model_for_litellm("gpt-5-mini"))
+            self.assertEqual(
+                "openrouter/openai/gpt-5-mini",
+                llm_utils._normalize_model_for_litellm("openrouter/openai/gpt-5-mini"),
+            )
+        finally:
+            llm_utils.config.llm_base_url = original_base
+
     def test_ensure_api_key_overwrites_stale_openai_env(self):
         original_env = os.environ.get("OPENAI_API_KEY")
         original_config_key = llm_utils.config.openai_key
@@ -204,6 +217,74 @@ class TestLiteLlmUtils(unittest.TestCase):
         assert isinstance(response, DecisionSchema)
         self.assertIsNotNone(response.proposed_command)
         self.assertGreater(total_tokens, 0)
+
+    def test_custom_base_url_passes_api_base_and_optional_key(self):
+        original_base = llm_utils.config.llm_base_url
+        original_key = llm_utils.config.llm_api_key
+        captured = {}
+
+        def fake_completion(**kwargs):
+            captured.update(kwargs)
+            return {
+                "choices": [{"message": {"content": '{"proposed_command":"choose 0","confidence":0.7,"explanation":"ok"}'}}],
+                "usage": {"total_tokens": 42},
+            }
+
+        try:
+            llm_utils.config.llm_base_url = "http://127.0.0.1:8000/v1"
+            llm_utils.config.llm_api_key = ""
+            with patch("rs.utils.llm_utils.completion", side_effect=fake_completion):
+                response, _ = llm_utils.ask_llm_once(
+                    message="test",
+                    model="Qwen/Qwen3-32B",
+                    struct=DecisionSchema,
+                    temperature=1.0,
+                    enable_cache=False,
+                )
+            self.assertIsInstance(response, DecisionSchema)
+            self.assertEqual("http://127.0.0.1:8000/v1", captured.get("api_base"))
+            self.assertNotIn("api_key", captured)
+
+            captured.clear()
+            llm_utils.config.llm_api_key = "test-local-secret"
+            with patch("rs.utils.llm_utils.completion", side_effect=fake_completion):
+                response, _ = llm_utils.ask_llm_once(
+                    message="test",
+                    model="Qwen/Qwen3-32B",
+                    struct=DecisionSchema,
+                    temperature=1.0,
+                    enable_cache=False,
+                )
+            self.assertIsInstance(response, DecisionSchema)
+            self.assertEqual("http://127.0.0.1:8000/v1", captured.get("api_base"))
+            self.assertEqual("test-local-secret", captured.get("api_key"))
+        finally:
+            llm_utils.config.llm_base_url = original_base
+            llm_utils.config.llm_api_key = original_key
+
+    def test_custom_base_url_allows_missing_provider_key(self):
+        original_base = llm_utils.config.llm_base_url
+        original_local_key = llm_utils.config.llm_api_key
+        original_openai_key = llm_utils.config.openai_key
+        original_env_openai_key = os.environ.get("OPENAI_API_KEY")
+
+        try:
+            llm_utils.config.llm_base_url = "http://127.0.0.1:8000/v1"
+            llm_utils.config.llm_api_key = ""
+            llm_utils.config.openai_key = ""
+            os.environ.pop("OPENAI_API_KEY", None)
+
+            ok = llm_utils._ensure_api_key_for_model("gpt-5-mini")
+
+            self.assertTrue(ok)
+        finally:
+            llm_utils.config.llm_base_url = original_base
+            llm_utils.config.llm_api_key = original_local_key
+            llm_utils.config.openai_key = original_openai_key
+            if original_env_openai_key is None:
+                os.environ.pop("OPENAI_API_KEY", None)
+            else:
+                os.environ["OPENAI_API_KEY"] = original_env_openai_key
 
 
 if __name__ == "__main__":
