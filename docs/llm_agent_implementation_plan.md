@@ -16,8 +16,8 @@ Introduce an LLM-assisted decision system that integrates with the existing hand
 - Phase 4 (Battle meta-advisor): Implemented as comparator-profile selection, not direct combat execution (`rs/llm/agents/battle_meta_advisor_agent.py`, `rs/llm/providers/battle_meta_llm_provider.py`, `rs/llm/integration/battle_context.py`, `rs/common/handlers/common_battle_handler.py`, `tests/ai/common/handlers/test_battle_handler_meta_advisor.py`).
   Refinement still needed: broader fight coverage and eventual follow-on path toward full battle-action advice.
 - Phase 5 (Expansion / memory / caching): Partially implemented.
-  Done: shared state-summary caching and compact run summaries (`rs/llm/state_summary_cache.py`), run-local decision memory (`rs/llm/decision_memory.py`), a reusable memory-backed LangGraph advisor base (`rs/llm/agents/memory_langgraph_agent.py`), and concrete LangGraph-backed event/card/shop advisors (`rs/llm/agents/event_advisor_agent.py`, `rs/llm/agents/card_reward_advisor_agent.py`, `rs/llm/agents/shop_purchase_advisor_agent.py`).
-  In progress: broader rollout of the LangGraph pattern to map/battle and refining memory summaries for longer runs.
+  Done: shared state-summary caching and compact run summaries (`rs/llm/state_summary_cache.py`), run-local decision memory (`rs/llm/decision_memory.py`), a reusable memory-backed LangGraph advisor base (`rs/llm/agents/memory_langgraph_agent.py`), concrete LangGraph-backed event/card/shop/map advisors (`rs/llm/agents/event_advisor_agent.py`, `rs/llm/agents/card_reward_advisor_agent.py`, `rs/llm/agents/shop_purchase_advisor_agent.py`, `rs/llm/agents/map_advisor_agent.py`), and a LangGraph-backed battle meta-advisor with run-local profile memory (`rs/llm/agents/battle_meta_advisor_agent.py`).
+  In progress: refining memory summaries for longer runs and deciding how far to push LangGraph toward direct battle-action proposals later.
   Not implemented yet: persistent decision memory beyond process lifetime and any direct full-battle LangGraph executor.
 
 ---
@@ -252,7 +252,7 @@ Success criteria:
 
 ## 10) Immediate Next Step
 
-Extend the LangGraph-backed Phase 5 pattern beyond events:
-- port one additional advisor with richer context (shop or card reward) onto `LangGraphBaseAgent`
+Stabilize the LangGraph-backed Phase 5 rollout:
 - keep using the plain decision memory store as the graph-readable memory source
-- validate that the graph-backed advisors preserve the same fallback behavior and command validation contract
+- tune longer-run memory summaries so prompts stay compact and useful
+- decide whether the next experimental step is persistent run memory or a direct battle-action pilot behind a hard safety flag
