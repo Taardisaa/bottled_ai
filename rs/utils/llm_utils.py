@@ -62,6 +62,9 @@ def _litellm_completion_kwargs(model: str, temperature: float, **extra_kwargs: A
     elif _is_openrouter_model(model):
         kwargs["api_base"] = config.openrouter_base_url
         kwargs["api_key"] = config.openrouter_key or config.openai_key
+    elif config.openai_base_url and not model.startswith("claude"):
+        kwargs["api_base"] = config.openai_base_url
+        kwargs["api_key"] = config.openai_key
     for key, value in extra_kwargs.items():
         if value is not None:
             kwargs[key] = value
@@ -105,7 +108,8 @@ def _ensure_api_key_for_model(model: str) -> bool:
 
     # Ensure OpenAI-compatible base URL overrides from OpenRouter do not leak
     # into non-OpenRouter calls in the same process.
-    if not _is_openrouter_model(model):
+    # Preserve env vars when a custom OpenAI base URL is configured.
+    if not _is_openrouter_model(model) and not config.openai_base_url:
         os.environ.pop("OPENAI_BASE_URL", None)
         os.environ.pop("OPENAI_API_BASE", None)
 

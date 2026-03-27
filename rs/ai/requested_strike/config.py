@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 CARD_REMOVAL_PRIORITY_LIST = [
     'defend',
     'strike',

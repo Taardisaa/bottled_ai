@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 # card id. 'strike+' is an upgraded strike
 CARD_REMOVAL_PRIORITY_LIST = [
     'strike',

@@ -95,3 +95,6 @@ Please note:
 - Please cover any new functionality with tests. If you're not sure how to do that, just submit your changes without tests anyway, and we can support you with adding them.
 
 Just create a pull request with your changes, and we'll address them promptly. Thank you!
+
+## Linux
+
