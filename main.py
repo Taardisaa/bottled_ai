@@ -60,30 +60,30 @@ if __name__ == "__main__":
     log("Starting up")
     log(f"Selected strategy: {selected_strategy.name}")
     log(f"LangMem status: {get_langmem_service().status()}")
-    llm_preflight = run_llm_preflight_check()
-    if llm_preflight.available:
-        log(
-            "LLM preflight succeeded: "
-            f"requested_model={llm_preflight.requested_model}, "
-            f"response_model={llm_preflight.response_model}, "
-            f"provider={llm_preflight.provider}, "
-            f"endpoint={llm_preflight.endpoint}, "
-            f"max_tokens={llm_preflight.max_tokens}, "
-            f"total_tokens={llm_preflight.total_tokens}, "
-            f"preview={llm_preflight.response_preview}"
-        )
-    else:
-        log(
-            "LLM preflight failed: "
-            f"requested_model={llm_preflight.requested_model}, "
-            f"provider={llm_preflight.provider}, "
-            f"endpoint={llm_preflight.endpoint}, "
-            f"max_tokens={llm_preflight.max_tokens}, "
-            f"error={llm_preflight.error}"
-        )
     log_new_run_sequence()
     try:
         client = Client()
+        llm_preflight = run_llm_preflight_check()
+        if llm_preflight.available:
+            log(
+                "LLM preflight succeeded: "
+                f"requested_model={llm_preflight.requested_model}, "
+                f"response_model={llm_preflight.response_model}, "
+                f"provider={llm_preflight.provider}, "
+                f"endpoint={llm_preflight.endpoint}, "
+                f"max_tokens={llm_preflight.max_tokens}, "
+                f"total_tokens={llm_preflight.total_tokens}, "
+                f"preview={llm_preflight.response_preview}"
+            )
+        else:
+            log(
+                "LLM preflight failed: "
+                f"requested_model={llm_preflight.requested_model}, "
+                f"provider={llm_preflight.provider}, "
+                f"endpoint={llm_preflight.endpoint}, "
+                f"max_tokens={llm_preflight.max_tokens}, "
+                f"error={llm_preflight.error}"
+            )
         game = Game(client, selected_strategy)
         if selected_seeds:
             for seed in selected_seeds:

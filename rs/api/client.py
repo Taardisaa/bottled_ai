@@ -1,23 +1,30 @@
-from rs.helper.logger import log, log_to_run
+from __future__ import annotations
+
+import json
+
+from rs.api.transport import GameTransport, ProtocolError, StdioGameTransport
 
 
 class Client:
 
-    def __init__(self):
+    def __init__(self, transport: GameTransport | None = None):
+        self._transport = StdioGameTransport() if transport is None else transport
+        self._connected = False
+        self.connect()
+
+    def connect(self) -> None:
+        if self._connected:
+            return
         self.send_message("ready")
+        self._connected = True
 
     def send_message(self, message: str, silent: bool = False, before_run: bool = False) -> str:
-        if not silent:
-            log_message = f"Sending message: {message}"
-            if before_run:
-                log(log_message)
-            else:
-                log_to_run(log_message)
-        input_response = input(message + "\n")
-        if not silent:
-            log_message = f"Response: {input_response}"
-            if before_run:
-                log(log_message)
-            else:
-                log_to_run(log_message)
-        return input_response
+        response = self._transport.send(message, silent=silent, before_run=before_run)
+        self._validate_protocol_response(response)
+        return response
+
+    def _validate_protocol_response(self, response: str) -> None:
+        try:
+            json.loads(response)
+        except json.JSONDecodeError as error:
+            raise ProtocolError(f"CommunicationMod returned malformed JSON: {error.msg}") from error
