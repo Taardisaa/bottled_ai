@@ -20,10 +20,13 @@ class TestMapContextBuilder(unittest.TestCase):
         self.assertEqual(0, context.game_state["floor"])
         self.assertEqual(1, context.game_state["act"])
         self.assertEqual("IRONCLAD", context.game_state["character_class"])
-        self.assertEqual("0_-1", context.game_state["current_position"])
         self.assertEqual("choose 2", context.extras["deterministic_best_command"])
         self.assertEqual(64, context.extras["map_graph_metadata"]["node_count"])
         self.assertGreater(context.extras["map_graph_metadata"]["edge_count"], 0)
+        self.assertEqual(11, context.extras["deck_profile"]["total_cards"])
+        self.assertIn("type_counts", context.extras["deck_profile"])
+        self.assertIn("upgraded_cards", context.extras["deck_profile"])
+        self.assertNotIn("cost_buckets", context.extras["deck_profile"])
 
         path_summaries = context.extras["sorted_path_summaries"]
         self.assertGreater(len(path_summaries), 0)
@@ -63,14 +66,14 @@ class TestMapContextBuilder(unittest.TestCase):
         representative_groups = context.extras["choice_representative_paths"]
         self.assertEqual(4, len(representative_groups))
         self.assertEqual("choose 0", representative_groups[0]["choice_command"])
-        self.assertLessEqual(len(representative_groups[0]["representative_paths"]), 3)
+        self.assertLessEqual(len(representative_groups[0]["representative_paths"]), 1)
         first_path = representative_groups[0]["representative_paths"][0]
         self.assertIn("rooms", first_path)
-        self.assertIn("room_counts", first_path)
         self.assertIn("path_length", first_path)
         self.assertIn("first_shop_distance", first_path)
         self.assertIn("first_campfire_distance", first_path)
         self.assertIn("first_elite_distance", first_path)
+        self.assertNotIn("room_counts", first_path)
 
 
 if __name__ == "__main__":

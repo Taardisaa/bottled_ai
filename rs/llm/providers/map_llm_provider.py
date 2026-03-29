@@ -94,11 +94,9 @@ class MapLlmProvider:
         )
 
     def _build_prompt(self, context: AgentContext) -> str:
-        langmem_status = self._normalize_langmem_status(context.extras.get("langmem_status", "disabled_by_config"))
         current_priorities = self._format_list_field(context.extras.get("current_priorities"), default="none")
         risk_flags = self._format_list_field(context.extras.get("risk_flags"), default="stable")
         deck_direction = str(context.extras.get("deck_direction", "unknown") or "unknown")
-        run_hypotheses = self._format_list_field(context.extras.get("run_hypotheses"), default="none")
         map_options_text = self._format_choice_list(context.choice_list)
         choice_branch_summaries_text = self._format_choice_branch_summaries(
             context.extras.get("choice_branch_summaries", []),
@@ -106,33 +104,32 @@ class MapLlmProvider:
         choice_representative_paths_text = self._format_choice_representative_paths(
             context.extras.get("choice_representative_paths", []),
         )
+        episodic_memories = self._optional_memory_line(
+            "Retrieved episodic memories",
+            context.extras.get("retrieved_episodic_memories", "none"),
+        )
+        semantic_memories = self._optional_memory_line(
+            "Retrieved semantic memories",
+            context.extras.get("retrieved_semantic_memories", "none"),
+        )
         return PROMPT_TEMPLATE.format(
-            handler_name=context.handler_name,
-            screen_type=context.screen_type,
-            available_commands=context.available_commands,
             map_options_text=map_options_text,
             floor=context.game_state.get("floor", "unknown"),
             act=context.game_state.get("act", "unknown"),
             current_hp=context.game_state.get("current_hp", "unknown"),
             max_hp=context.game_state.get("max_hp", "unknown"),
             gold=context.game_state.get("gold", "unknown"),
-            room_type=context.game_state.get("room_type", "unknown"),
             character_class=context.game_state.get("character_class", "unknown"),
             ascension_level=context.game_state.get("ascension_level", "unknown"),
             act_boss=context.game_state.get("act_boss", "unknown"),
-            current_position=context.game_state.get("current_position", "unknown"),
             run_memory_summary=context.extras.get("run_memory_summary", ""),
             recent_llm_decisions=context.extras.get("recent_llm_decisions", "none"),
-            retrieved_episodic_memories=context.extras.get("retrieved_episodic_memories", "none"),
-            retrieved_semantic_memories=context.extras.get("retrieved_semantic_memories", "none"),
-            langmem_status=langmem_status,
+            episodic_memories=episodic_memories,
+            semantic_memories=semantic_memories,
             current_priorities=current_priorities,
             risk_flags=risk_flags,
             deck_direction=deck_direction,
-            run_hypotheses=run_hypotheses,
             relic_names=json.dumps(context.extras.get("relic_names", []), sort_keys=True),
-            held_potion_names=json.dumps(context.extras.get("held_potion_names", []), sort_keys=True),
-            potions_full=context.extras.get("potions_full", False),
             deck_profile=json.dumps(context.extras.get("deck_profile", {}), sort_keys=True),
             boss_available=context.extras.get("boss_available", False),
             first_node_chosen=context.extras.get("first_node_chosen", False),
@@ -207,7 +204,7 @@ class MapLlmProvider:
                 rooms = " > ".join(str(room) for room in path.get("rooms", [])) or "none"
                 rendered_groups.append(
                     (
-                        f"  - rooms={rooms} | room_counts={json.dumps(path.get('room_counts', {}), sort_keys=True)} | "
+                        f"  - rooms={rooms} | "
                         f"path_length={path.get('path_length', 'unknown')} | "
                         f"first_shop={path.get('first_shop_distance', 'none')} | "
                         f"first_campfire={path.get('first_campfire_distance', 'none')} | "
@@ -224,3 +221,9 @@ class MapLlmProvider:
         if value["min"] == value["max"]:
             return str(value["min"])
         return f"{value['min']}-{value['max']}"
+
+    def _optional_memory_line(self, label: str, value: Any) -> str:
+        normalized = str(value or "").strip()
+        if normalized == "" or normalized.lower() == "none":
+            return ""
+        return f"{label}: {normalized}\n"

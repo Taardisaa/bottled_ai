@@ -17,24 +17,20 @@ class TestMapLlmProviderPrompt(unittest.TestCase):
                 "current_hp": 80,
                 "max_hp": 80,
                 "gold": 99,
-                "room_type": "NeowRoom",
                 "character_class": "IRONCLAD",
                 "ascension_level": 0,
                 "act_boss": "The Guardian",
-                "current_position": "0_-1",
             },
             extras={
                 "relic_names": ["Burning Blood"],
-                "held_potion_names": [],
-                "potions_full": False,
                 "run_memory_summary": "IRONCLAD on Act 1 Floor 0 at HP 80/80 with 99 gold.",
                 "recent_llm_decisions": "A1 F0 EventHandler -> choose 0 (0.91, free value)",
-                "langmem_status": "embeddings_unavailable:missing model",
+                "retrieved_episodic_memories": "none",
+                "retrieved_semantic_memories": "none",
                 "current_priorities": ["avoid elites"],
                 "risk_flags": ["low_max_hp"],
                 "deck_direction": "frontload",
-                "run_hypotheses": ["maintain CommonMapHandler consistency"],
-                "deck_profile": {"total_cards": 11, "type_counts": {"ATTACK": 6, "SKILL": 5}},
+                "deck_profile": {"total_cards": 11, "type_counts": {"ATTACK": 6, "SKILL": 5}, "upgraded_cards": 0},
                 "boss_available": False,
                 "first_node_chosen": False,
                 "deterministic_best_command": "choose 3",
@@ -79,9 +75,7 @@ class TestMapLlmProviderPrompt(unittest.TestCase):
                         "choice_command": "choose 0",
                         "representative_paths": [
                             {
-                                "choice_command": "choose 0",
                                 "rooms": ["MONSTER", "QUESTION", "QUESTION", "MONSTER", "QUESTION", "CAMPFIRE"],
-                                "room_counts": {"MONSTER": 2, "QUESTION": 3, "ELITE": 0, "CAMPFIRE": 1, "TREASURE": 0, "SHOP": 0, "BOSS": 1},
                                 "path_length": 6,
                                 "first_shop_distance": None,
                                 "first_campfire_distance": 5,
@@ -95,9 +89,7 @@ class TestMapLlmProviderPrompt(unittest.TestCase):
                         "choice_command": "choose 3",
                         "representative_paths": [
                             {
-                                "choice_command": "choose 3",
                                 "rooms": ["MONSTER", "QUESTION", "SHOP", "QUESTION", "SHOP", "ELITE"],
-                                "room_counts": {"MONSTER": 1, "QUESTION": 2, "ELITE": 1, "CAMPFIRE": 0, "TREASURE": 0, "SHOP": 2, "BOSS": 1},
                                 "path_length": 6,
                                 "first_shop_distance": 2,
                                 "first_campfire_distance": None,
@@ -114,7 +106,6 @@ class TestMapLlmProviderPrompt(unittest.TestCase):
 
         self.assertIn("answer in short plain text using these fields", prompt)
         self.assertIn('choose <index>', prompt)
-        self.assertIn('Available protocol commands:', prompt)
         self.assertIn('- 0 | route="x=0"', prompt)
         self.assertIn("Deterministic best command: choose 3", prompt)
         self.assertIn("Choice branch summaries:", prompt)
@@ -124,12 +115,20 @@ class TestMapLlmProviderPrompt(unittest.TestCase):
         self.assertIn("rooms=MONSTER > QUESTION > SHOP > QUESTION > SHOP > ELITE", prompt)
         self.assertIn("Run memory summary: IRONCLAD on Act 1 Floor 0 at HP 80/80 with 99 gold.", prompt)
         self.assertIn("Recent LLM decisions: A1 F0 EventHandler -> choose 0 (0.91, free value)", prompt)
-        self.assertIn("LangMem status: unavailable", prompt)
-        self.assertNotIn("missing model", prompt)
         self.assertIn('Current relics: ["Burning Blood"]', prompt)
-        self.assertIn("Current position: 0_-1", prompt)
+        self.assertIn('Deck profile: {"total_cards": 11, "type_counts": {"ATTACK": 6, "SKILL": 5}, "upgraded_cards": 0}', prompt)
         self.assertNotIn("Return ONLY a JSON object", prompt)
         self.assertNotIn("Sorted path summaries (worst to best):", prompt)
+        self.assertNotIn("Handler:", prompt)
+        self.assertNotIn("Screen:", prompt)
+        self.assertNotIn("Available protocol commands:", prompt)
+        self.assertNotIn("LangMem status:", prompt)
+        self.assertNotIn("Current position:", prompt)
+        self.assertNotIn("Room type:", prompt)
+        self.assertNotIn("Run hypotheses:", prompt)
+        self.assertNotIn("Retrieved episodic memories:", prompt)
+        self.assertNotIn("Retrieved semantic memories:", prompt)
+        self.assertNotIn("room_counts=", prompt)
 
 
 if __name__ == "__main__":

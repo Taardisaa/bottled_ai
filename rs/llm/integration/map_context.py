@@ -382,12 +382,23 @@ def _build_choice_representative_paths(choice_families: list[dict[str, Any]]) ->
     representative_groups: list[dict[str, Any]] = []
     for family in choice_families:
         path_shapes = [shape for shape in family.get("path_shapes", []) if isinstance(shape, dict)]
+        representative_paths = _representative_candidate_paths(path_shapes)[:1]
+        compact_paths = [
+            {
+                "rooms": list(path.get("rooms", [])),
+                "path_length": path.get("path_length"),
+                "first_shop_distance": path.get("first_shop_distance"),
+                "first_campfire_distance": path.get("first_campfire_distance"),
+                "first_elite_distance": path.get("first_elite_distance"),
+            }
+            for path in representative_paths
+        ]
         representative_groups.append(
             {
                 "choice_index": family["choice_index"],
                 "choice_label": family["choice_label"],
                 "choice_command": family["choice_command"],
-                "representative_paths": _representative_candidate_paths(path_shapes),
+                "representative_paths": compact_paths,
             }
         )
     return representative_groups
@@ -421,6 +432,14 @@ def build_map_agent_context(
     deterministic_choice_index = game_map.get_path_choice_from_choices(state.get_choice_list())
     deterministic_choice_command = f"choose {deterministic_choice_index}"
     run_summary = get_cached_run_summary(state)
+    raw_deck_profile = run_summary["deck_profile"]
+    compact_deck_profile = {
+        "total_cards": raw_deck_profile.get("total_cards"),
+        "type_counts": raw_deck_profile.get("type_counts", {}),
+        "upgraded_cards": raw_deck_profile.get("upgraded_cards"),
+    }
+    if "exhaust_cards" in raw_deck_profile:
+        compact_deck_profile["exhaust_cards"] = raw_deck_profile.get("exhaust_cards")
 
     game_state = state.game_state()
     screen_state = state.screen_state()
@@ -435,16 +454,14 @@ def build_map_agent_context(
             "current_hp": game_state.get("current_hp"),
             "max_hp": game_state.get("max_hp"),
             "gold": game_state.get("gold"),
-            "room_type": game_state.get("room_type"),
             "character_class": game_state.get("class"),
             "ascension_level": game_state.get("ascension_level"),
             "act_boss": game_state.get("act_boss"),
-            "current_position": current_position,
         },
         extras={
             "run_id": run_summary["run_id"],
             "strategy_name": get_current_strategy_name(),
-            "deck_profile": run_summary["deck_profile"],
+            "deck_profile": compact_deck_profile,
             "relic_names": run_summary["relic_names"],
             "held_potion_names": run_summary["held_potion_names"],
             "potions_full": run_summary["potions_full"],
