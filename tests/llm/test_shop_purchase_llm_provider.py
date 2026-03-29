@@ -33,6 +33,11 @@ class TestShopPurchaseLlmProviderPrompt(unittest.TestCase):
                 },
                 "run_memory_summary": "IRONCLAD on Act 1 Floor 10 at HP 57/85 with 223 gold.",
                 "recent_llm_decisions": "A1 F9 CardRewardHandler -> choose 1 (0.76, take scaling)",
+                "langmem_status": "embeddings_unavailable:request failed",
+                "current_priorities": ["remove strikes", "preserve gold"],
+                "risk_flags": [],
+                "deck_direction": "strength",
+                "run_hypotheses": ["maintain ShopPurchaseHandler consistency"],
                 "relic_names": ["Burning Blood", "Mummified Hand"],
                 "held_potion_names": ["gambler's brew", "elixir"],
                 "potions_full": False,
@@ -55,9 +60,15 @@ class TestShopPurchaseLlmProviderPrompt(unittest.TestCase):
         provider = ShopPurchaseLlmProvider(model="gpt-5-mini")
         prompt = provider._build_prompt(context)
 
+        self.assertIn("answer in short plain text using these fields", prompt)
+        self.assertIn('choose <index>', prompt)
+        self.assertIn('Available protocol commands:', prompt)
+        self.assertIn('- 0 | option="purge"', prompt)
         self.assertIn("Class: IRONCLAD, Ascension: 3, Act boss: The Guardian", prompt)
         self.assertIn("Run memory summary: IRONCLAD on Act 1 Floor 10 at HP 57/85 with 223 gold.", prompt)
         self.assertIn("Recent LLM decisions: A1 F9 CardRewardHandler -> choose 1 (0.76, take scaling)", prompt)
+        self.assertIn("LangMem status: unavailable", prompt)
+        self.assertNotIn("request failed", prompt)
         self.assertIn("Deck profile:", prompt)
         self.assertIn('"ATTACK": 7', prompt)
         self.assertIn('Current relics: ["Burning Blood", "Mummified Hand"]', prompt)
@@ -70,6 +81,7 @@ class TestShopPurchaseLlmProviderPrompt(unittest.TestCase):
         self.assertIn('"name": "Vajra"', prompt)
         self.assertIn("Shop potion offers:", prompt)
         self.assertIn('"name": "Strength Potion"', prompt)
+        self.assertNotIn("Return ONLY a JSON object", prompt)
 
 
 if __name__ == "__main__":

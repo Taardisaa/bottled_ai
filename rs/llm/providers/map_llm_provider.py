@@ -94,11 +94,17 @@ class MapLlmProvider:
         )
 
     def _build_prompt(self, context: AgentContext) -> str:
+        langmem_status = self._normalize_langmem_status(context.extras.get("langmem_status", "disabled_by_config"))
+        current_priorities = self._format_list_field(context.extras.get("current_priorities"), default="none")
+        risk_flags = self._format_list_field(context.extras.get("risk_flags"), default="stable")
+        deck_direction = str(context.extras.get("deck_direction", "unknown") or "unknown")
+        run_hypotheses = self._format_list_field(context.extras.get("run_hypotheses"), default="none")
+        map_options_text = self._format_choice_list(context.choice_list)
         return PROMPT_TEMPLATE.format(
             handler_name=context.handler_name,
             screen_type=context.screen_type,
             available_commands=context.available_commands,
-            choice_list=context.choice_list,
+            map_options_text=map_options_text,
             floor=context.game_state.get("floor", "unknown"),
             act=context.game_state.get("act", "unknown"),
             current_hp=context.game_state.get("current_hp", "unknown"),
@@ -113,7 +119,11 @@ class MapLlmProvider:
             recent_llm_decisions=context.extras.get("recent_llm_decisions", "none"),
             retrieved_episodic_memories=context.extras.get("retrieved_episodic_memories", "none"),
             retrieved_semantic_memories=context.extras.get("retrieved_semantic_memories", "none"),
-            langmem_status=context.extras.get("langmem_status", "disabled_by_config"),
+            langmem_status=langmem_status,
+            current_priorities=current_priorities,
+            risk_flags=risk_flags,
+            deck_direction=deck_direction,
+            run_hypotheses=run_hypotheses,
             relic_names=json.dumps(context.extras.get("relic_names", []), sort_keys=True),
             held_potion_names=json.dumps(context.extras.get("held_potion_names", []), sort_keys=True),
             potions_full=context.extras.get("potions_full", False),
@@ -125,3 +135,23 @@ class MapLlmProvider:
             choice_path_overviews=json.dumps(context.extras.get("choice_path_overviews", []), sort_keys=True),
             sorted_path_summaries=json.dumps(context.extras.get("sorted_path_summaries", []), sort_keys=True),
         )
+
+    def _format_choice_list(self, choice_list: list[Any]) -> str:
+        if not choice_list:
+            return "- none"
+        return "\n".join(f"- {index} | route=\"{str(choice).strip()}\"" for index, choice in enumerate(choice_list))
+
+    def _normalize_langmem_status(self, status: Any) -> str:
+        status_text = str(status or "").strip().lower()
+        if status_text == "" or status_text == "disabled_by_config":
+            return "disabled"
+        if "unavailable" in status_text or "error" in status_text or "failed" in status_text:
+            return "unavailable"
+        return "ready"
+
+    def _format_list_field(self, value: Any, default: str) -> str:
+        if isinstance(value, list):
+            normalized_values = [str(item).strip() for item in value if str(item).strip()]
+            return ", ".join(normalized_values) if normalized_values else default
+        value_text = str(value or "").strip()
+        return value_text if value_text else default

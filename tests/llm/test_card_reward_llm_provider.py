@@ -41,6 +41,11 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
                 },
                 "run_memory_summary": "IRONCLAD on Act 1 Floor 10 at HP 50/80 with 99 gold.",
                 "recent_llm_decisions": "A1 F9 EventHandler -> choose 0 (0.88, safe heal)",
+                "langmem_status": "embeddings_unavailable:missing model",
+                "current_priorities": ["find scaling"],
+                "risk_flags": [],
+                "deck_direction": "attack",
+                "run_hypotheses": ["maintain CardRewardHandler consistency"],
                 "choice_card_summaries": [
                     {"index": 0, "name": "pommel strike", "type": "ATTACK", "rarity": "COMMON", "cost": 1},
                     {"index": 1, "name": "cleave", "type": "ATTACK", "rarity": "COMMON", "cost": 1},
@@ -61,11 +66,17 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
             provider = CardRewardLlmProvider(model="gpt-5-mini")
             prompt = provider._build_prompt(context)
 
+        self.assertIn("answer in short plain text using these fields", prompt)
+        self.assertIn('choose <index>', prompt)
+        self.assertIn('Available protocol commands:', prompt)
+        self.assertIn('- 0 | card="pommel strike"', prompt)
         self.assertIn("Card DB status: available", prompt)
         self.assertIn("Choice card details (stsdb):", prompt)
         self.assertIn("Class: IRONCLAD, Ascension: 5, Act boss: Hexaghost", prompt)
         self.assertIn("Run memory summary: IRONCLAD on Act 1 Floor 10 at HP 50/80 with 99 gold.", prompt)
         self.assertIn("Recent LLM decisions: A1 F9 EventHandler -> choose 0 (0.88, safe heal)", prompt)
+        self.assertIn("LangMem status: unavailable", prompt)
+        self.assertNotIn("missing model", prompt)
         self.assertIn("Deck profile:", prompt)
         self.assertIn('"upgraded_cards": 2', prompt)
         self.assertIn("Choice card summaries:", prompt)
@@ -73,6 +84,7 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
         self.assertIn('Reward screen flags: {"bowl_available": true, "skip_available": true}', prompt)
         self.assertIn('"name": "pommel strike"', prompt)
         self.assertIn("Deck card counts:", prompt)
+        self.assertNotIn("Return ONLY a JSON object", prompt)
 
     def test_query_card_receives_upgrade_times(self):
         calls = []

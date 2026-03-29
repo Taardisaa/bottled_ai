@@ -114,16 +114,21 @@ class ShopPurchaseLlmProvider:
         recent_llm_decisions = context.extras.get("recent_llm_decisions", "none")
         retrieved_episodic_memories = context.extras.get("retrieved_episodic_memories", "none")
         retrieved_semantic_memories = context.extras.get("retrieved_semantic_memories", "none")
-        langmem_status = context.extras.get("langmem_status", "disabled_by_config")
+        langmem_status = self._normalize_langmem_status(context.extras.get("langmem_status", "disabled_by_config"))
         purge_cost = context.extras.get("purge_cost", "unknown")
         purge_available = context.extras.get("purge_available", False)
         offer_summaries = context.extras.get("offer_summaries", {})
+        current_priorities = self._format_list_field(context.extras.get("current_priorities"), default="none")
+        risk_flags = self._format_list_field(context.extras.get("risk_flags"), default="stable")
+        deck_direction = str(context.extras.get("deck_direction", "unknown") or "unknown")
+        run_hypotheses = self._format_list_field(context.extras.get("run_hypotheses"), default="none")
+        shop_options_text = self._format_choice_list(context.choice_list)
 
         return PROMPT_TEMPLATE.format(
             handler_name=context.handler_name,
             screen_type=context.screen_type,
             available_commands=context.available_commands,
-            choice_list=context.choice_list,
+            shop_options_text=shop_options_text,
             floor=floor,
             act=act,
             gold=gold,
@@ -141,6 +146,10 @@ class ShopPurchaseLlmProvider:
             retrieved_episodic_memories=retrieved_episodic_memories,
             retrieved_semantic_memories=retrieved_semantic_memories,
             langmem_status=langmem_status,
+            current_priorities=current_priorities,
+            risk_flags=risk_flags,
+            deck_direction=deck_direction,
+            run_hypotheses=run_hypotheses,
             relic_names=json.dumps(relic_names, sort_keys=True),
             held_potion_names=json.dumps(held_potion_names, sort_keys=True),
             potions_full=potions_full,
@@ -150,3 +159,23 @@ class ShopPurchaseLlmProvider:
             shop_relic_offers=json.dumps(offer_summaries.get("relics", []), sort_keys=True),
             shop_potion_offers=json.dumps(offer_summaries.get("potions", []), sort_keys=True),
         )
+
+    def _format_choice_list(self, choice_list: list[Any]) -> str:
+        if not choice_list:
+            return "- none"
+        return "\n".join(f"- {index} | option=\"{str(choice).strip()}\"" for index, choice in enumerate(choice_list))
+
+    def _normalize_langmem_status(self, status: Any) -> str:
+        status_text = str(status or "").strip().lower()
+        if status_text == "" or status_text == "disabled_by_config":
+            return "disabled"
+        if "unavailable" in status_text or "error" in status_text or "failed" in status_text:
+            return "unavailable"
+        return "ready"
+
+    def _format_list_field(self, value: Any, default: str) -> str:
+        if isinstance(value, list):
+            normalized_values = [str(item).strip() for item in value if str(item).strip()]
+            return ", ".join(normalized_values) if normalized_values else default
+        value_text = str(value or "").strip()
+        return value_text if value_text else default

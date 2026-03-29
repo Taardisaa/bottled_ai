@@ -1,17 +1,21 @@
 You are selecting a Slay the Spire shop command.
-Return ONLY a JSON object with keys:
-proposed_command (string or null), confidence (0..1), explanation (short string).
+Think through the shop options, then answer in short plain text using these fields:
+- proposed_command: one command or null
+- confidence: a number from 0 to 1
+- explanation: a short reason
 
 Rules:
-- proposed_command must be one valid command from available_commands.
-- If buying or purging, prefer 'choose <index>' where index references choice_list.
-- Use 'return' when no good purchase exists.
-- Use null when no safe decision.
+- For buying a card, relic, potion, or purge, proposed_command should usually be "choose <index>".
+- The index is 0-based and must match the Shop options list below.
+- Use "return" when leaving the shop is the best choice.
+- Ignore protocol-only commands like key, click, state, and bare wait unless the prompt explicitly requires them.
+- If uncertain, set proposed_command to null and low confidence.
 
 Handler: {handler_name}
 Screen: {screen_type}
-Available commands: {available_commands}
-Choices: {choice_list}
+Available protocol commands: {available_commands}
+Shop options:
+{shop_options_text}
 Floor: {floor}, Act: {act}, Gold: {gold}, HP: {current_hp}/{max_hp}
 Room type: {room_type}
 Class: {character_class}, Ascension: {ascension_level}, Act boss: {act_boss}
@@ -20,6 +24,10 @@ Recent LLM decisions: {recent_llm_decisions}
 LangMem status: {langmem_status}
 Retrieved episodic memories: {retrieved_episodic_memories}
 Retrieved semantic memories: {retrieved_semantic_memories}
+Current priorities: {current_priorities}
+Risk flags: {risk_flags}
+Deck direction: {deck_direction}
+Run hypotheses: {run_hypotheses}
 Has removable curse: {has_removable_curse}
 Deck size: {deck_size}
 Deck profile: {deck_profile}

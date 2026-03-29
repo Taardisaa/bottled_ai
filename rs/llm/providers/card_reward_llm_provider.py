@@ -115,16 +115,21 @@ class CardRewardLlmProvider:
         recent_llm_decisions = context.extras.get("recent_llm_decisions", "none")
         retrieved_episodic_memories = context.extras.get("retrieved_episodic_memories", "none")
         retrieved_semantic_memories = context.extras.get("retrieved_semantic_memories", "none")
-        langmem_status = context.extras.get("langmem_status", "disabled_by_config")
+        langmem_status = self._normalize_langmem_status(context.extras.get("langmem_status", "disabled_by_config"))
         choice_card_summaries = context.extras.get("choice_card_summaries", [])
         reward_screen_flags = context.extras.get("reward_screen_flags", {})
         card_details = self._build_card_details(context)
+        current_priorities = self._format_list_field(context.extras.get("current_priorities"), default="none")
+        risk_flags = self._format_list_field(context.extras.get("risk_flags"), default="stable")
+        deck_direction = str(context.extras.get("deck_direction", "unknown") or "unknown")
+        run_hypotheses = self._format_list_field(context.extras.get("run_hypotheses"), default="none")
+        reward_options_text = self._format_reward_options(choice_card_summaries, context.choice_list)
 
         return PROMPT_TEMPLATE.format(
             handler_name=context.handler_name,
             screen_type=context.screen_type,
             available_commands=context.available_commands,
-            choice_list=context.choice_list,
+            reward_options_text=reward_options_text,
             room_phase=room_phase,
             floor=floor,
             act=act,
@@ -145,12 +150,39 @@ class CardRewardLlmProvider:
             retrieved_episodic_memories=retrieved_episodic_memories,
             retrieved_semantic_memories=retrieved_semantic_memories,
             langmem_status=langmem_status,
+            current_priorities=current_priorities,
+            risk_flags=risk_flags,
+            deck_direction=deck_direction,
+            run_hypotheses=run_hypotheses,
             choice_card_summaries=json.dumps(choice_card_summaries, sort_keys=True),
             reward_screen_flags=json.dumps(reward_screen_flags, sort_keys=True),
             choice_card_details=json.dumps(card_details["choice"], sort_keys=True),
             deck_card_details=json.dumps(card_details["deck"], sort_keys=True),
             card_db_status="available",
         )
+
+    def _format_reward_options(self, choice_card_summaries: list[dict[str, Any]], choice_list: list[Any]) -> str:
+        if isinstance(choice_card_summaries, list) and choice_card_summaries:
+            rendered_options: list[str] = []
+            for fallback_index, card in enumerate(choice_card_summaries):
+                if not isinstance(card, dict):
+                    continue
+                index = card.get("index", fallback_index)
+                name = str(card.get("name", "")).strip()
+                card_type = str(card.get("type", "")).strip()
+                rarity = str(card.get("rarity", "")).strip()
+                cost = card.get("cost", "unknown")
+                upgrades = card.get("upgrades", 0)
+                rendered_options.append(
+                    f"- {index} | card=\"{name}\" | type={card_type or 'unknown'} | "
+                    f"rarity={rarity or 'unknown'} | cost={cost} | upgrades={upgrades}"
+                )
+            if rendered_options:
+                return "\n".join(rendered_options)
+
+        if choice_list:
+            return "\n".join(f"- {index} | option=\"{str(choice).strip()}\"" for index, choice in enumerate(choice_list))
+        return "- none"
 
     def _build_card_details(self, context: AgentContext) -> dict[str, list[dict[str, Any]]]:
         choice_entries = self._build_entries_from_names(context.choice_list)
@@ -229,5 +261,20 @@ class CardRewardLlmProvider:
             return left.strip(), int(right)
 
         return text, 0
+
+    def _normalize_langmem_status(self, status: Any) -> str:
+        status_text = str(status or "").strip().lower()
+        if status_text == "" or status_text == "disabled_by_config":
+            return "disabled"
+        if "unavailable" in status_text or "error" in status_text or "failed" in status_text:
+            return "unavailable"
+        return "ready"
+
+    def _format_list_field(self, value: Any, default: str) -> str:
+        if isinstance(value, list):
+            normalized_values = [str(item).strip() for item in value if str(item).strip()]
+            return ", ".join(normalized_values) if normalized_values else default
+        value_text = str(value or "").strip()
+        return value_text if value_text else default
 
     
