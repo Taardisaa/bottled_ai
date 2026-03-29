@@ -57,7 +57,7 @@ class EventLlmProvider:
             struct=EventDecisionSchema,
             temperature=self.temperature,
             cache_namespace="event_advisor_agent",
-            two_layer_struct_convert=False,
+            two_layer_struct_convert=config.llm_two_layer_struct_convert,
         )
 
         if isinstance(response, dict):

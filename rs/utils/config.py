@@ -8,6 +8,17 @@ from rs.utils.path_utils import get_repo_root
 from rs.utils.yaml_utils import load_yaml_mapping
 
 
+def _parse_bool(value: str | None, default: bool) -> bool:
+    if value is None:
+        return default
+    lowered = value.strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def _load_dotenv(path: Path) -> dict[str, str]:
     if not path.exists():
         return {}
@@ -25,6 +36,8 @@ def _load_dotenv(path: Path) -> dict[str, str]:
 @dataclass
 class Config:
     fast_llm_model: str = "gpt-5-mini"
+    llm_enable_thinking: bool = False
+    llm_two_layer_struct_convert: bool = False
     dataset_dir_path: str = "dataset"
     openai_key: str = ""
     anthropic_key: str = ""
@@ -60,6 +73,14 @@ def load_config(config_path: str | None = None, env_path: str | None = None) -> 
         or dotenv_values.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
     llm_base_url = os.environ.get("LLM_BASE_URL") or dotenv_values.get("LLM_BASE_URL", "")
     llm_api_key = os.environ.get("LLM_API_KEY") or dotenv_values.get("LLM_API_KEY", "")
+    llm_enable_thinking = _parse_bool(
+        os.environ.get("LLM_ENABLE_THINKING") or dotenv_values.get("LLM_ENABLE_THINKING"),
+        bool(values.get("llm_enable_thinking", False)),
+    )
+    llm_two_layer_struct_convert = _parse_bool(
+        os.environ.get("LLM_TWO_LAYER_STRUCT_CONVERT") or dotenv_values.get("LLM_TWO_LAYER_STRUCT_CONVERT"),
+        bool(values.get("llm_two_layer_struct_convert", False)),
+    )
 
     cache_values = values.get("cache", {})
     load_cache_options = dict(cache_values.get("load_options", {"llm_query": True}))
@@ -67,6 +88,8 @@ def load_config(config_path: str | None = None, env_path: str | None = None) -> 
 
     return Config(
         fast_llm_model=str(values.get("fast_llm_model", "gpt-5-mini")),
+        llm_enable_thinking=llm_enable_thinking,
+        llm_two_layer_struct_convert=llm_two_layer_struct_convert,
         dataset_dir_path=str(values.get("dataset_dir_path", "dataset")),
         openai_key=str(openai_key),
         anthropic_key=str(anthropic_key),

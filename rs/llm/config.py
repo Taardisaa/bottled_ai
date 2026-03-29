@@ -20,6 +20,8 @@ class LlmConfig:
     confidence_threshold: float = 0.4
     telemetry_enabled: bool = True
     telemetry_path: str = "logs/llm_decisions.jsonl"
+    graph_trace_enabled: bool = True
+    graph_trace_path: str = "logs/ai_player_graph.jsonl"
     ai_player_graph_enabled: bool = False
     langmem_enabled: bool = False
     langmem_sqlite_path: str = "dataset/langmem/memory.sqlite3"
@@ -89,6 +91,8 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
     confidence_default = float(values.get("confidence_threshold", 0.4))
     telemetry_enabled_default = bool(values.get("telemetry_enabled", True))
     telemetry_path_default = str(values.get("telemetry_path", "logs/llm_decisions.jsonl"))
+    graph_trace_enabled_default = bool(values.get("graph_trace_enabled", True))
+    graph_trace_path_default = str(values.get("graph_trace_path", "logs/ai_player_graph.jsonl"))
     ai_player_graph_enabled_default = bool(values.get("ai_player_graph_enabled", False))
     langmem_values = values.get("langmem", {})
     langmem_enabled_default = bool(langmem_values.get("enabled", False))
@@ -109,6 +113,11 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
     confidence_threshold = float(os.environ.get("LLM_CONFIDENCE_THRESHOLD", str(confidence_default)))
     telemetry_enabled = _parse_bool(os.environ.get("LLM_TELEMETRY_ENABLED"), telemetry_enabled_default)
     telemetry_path = os.environ.get("LLM_TELEMETRY_PATH", telemetry_path_default)
+    graph_trace_enabled = _parse_bool(
+        os.environ.get("AI_PLAYER_GRAPH_TRACE_ENABLED"),
+        graph_trace_enabled_default,
+    )
+    graph_trace_path = os.environ.get("AI_PLAYER_GRAPH_TRACE_PATH", graph_trace_path_default)
     ai_player_graph_enabled = _parse_bool(
         os.environ.get("AI_PLAYER_GRAPH_ENABLED"),
         ai_player_graph_enabled_default,
@@ -146,6 +155,8 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
         confidence_threshold=confidence_threshold,
         telemetry_enabled=telemetry_enabled,
         telemetry_path=telemetry_path,
+        graph_trace_enabled=graph_trace_enabled,
+        graph_trace_path=graph_trace_path,
         ai_player_graph_enabled=ai_player_graph_enabled,
         langmem_enabled=langmem_enabled,
         langmem_sqlite_path=langmem_sqlite_path,

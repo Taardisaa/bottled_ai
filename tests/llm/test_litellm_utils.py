@@ -117,6 +117,13 @@ class TestLiteLlmUtils(unittest.TestCase):
         with patch("rs.utils.llm_utils.litellm_get_max_tokens", side_effect=Exception("not mapped")):
             self.assertEqual(262144, llm_utils.get_model_token_limit("openai/qwen-mlx"))
 
+    def test_get_model_token_limit_suppresses_known_static_qwen_mlx_fallback_log(self):
+        with patch("rs.utils.llm_utils.litellm_get_max_tokens", side_effect=Exception("not mapped")), \
+                patch("rs.utils.llm_utils.logger.debug") as debug_mock:
+            self.assertEqual(262144, llm_utils.get_model_token_limit("openai/qwen-mlx"))
+
+        debug_mock.assert_not_called()
+
     def test_count_tokens_falls_back_to_tiktoken_without_warning_for_prefixed_model(self):
         class FakeEncoding:
             def encode(self, text):
@@ -225,6 +232,7 @@ class TestLiteLlmUtils(unittest.TestCase):
                     struct=DecisionSchema,
                     temperature=1.0,
                     enable_cache=False,
+                    two_layer_struct_convert=False,
                 )
         finally:
             llm_utils.config.openrouter_key = original_key
@@ -269,6 +277,7 @@ class TestLiteLlmUtils(unittest.TestCase):
                 struct=IntSchema,
                 temperature=1.0,
                 enable_cache=False,
+                two_layer_struct_convert=False,
             )
 
         self.assertIsInstance(responses[0], IntSchema)
@@ -377,6 +386,7 @@ class TestLiteLlmUtils(unittest.TestCase):
     def test_custom_base_url_passes_api_base_and_optional_key(self):
         original_base = llm_utils.config.llm_base_url
         original_key = llm_utils.config.llm_api_key
+        original_enable_thinking = llm_utils.config.llm_enable_thinking
         captured = {}
 
         def fake_completion(**kwargs):
@@ -389,6 +399,7 @@ class TestLiteLlmUtils(unittest.TestCase):
         try:
             llm_utils.config.llm_base_url = "http://127.0.0.1:8000/v1"
             llm_utils.config.llm_api_key = ""
+            llm_utils.config.llm_enable_thinking = True
             with patch("rs.utils.llm_utils.completion", side_effect=fake_completion):
                 response, _ = llm_utils.ask_llm_once(
                     message="test",
@@ -396,10 +407,12 @@ class TestLiteLlmUtils(unittest.TestCase):
                     struct=DecisionSchema,
                     temperature=1.0,
                     enable_cache=False,
+                    two_layer_struct_convert=False,
                 )
             self.assertIsInstance(response, DecisionSchema)
             self.assertEqual("http://127.0.0.1:8000/v1", captured.get("api_base"))
             self.assertNotIn("api_key", captured)
+            self.assertEqual(True, captured.get("extra_body", {}).get("chat_template_kwargs", {}).get("enable_thinking"))
 
             captured.clear()
             llm_utils.config.llm_api_key = "test-local-secret"
@@ -410,13 +423,16 @@ class TestLiteLlmUtils(unittest.TestCase):
                     struct=DecisionSchema,
                     temperature=1.0,
                     enable_cache=False,
+                    two_layer_struct_convert=False,
                 )
             self.assertIsInstance(response, DecisionSchema)
             self.assertEqual("http://127.0.0.1:8000/v1", captured.get("api_base"))
             self.assertEqual("test-local-secret", captured.get("api_key"))
+            self.assertEqual(True, captured.get("extra_body", {}).get("chat_template_kwargs", {}).get("enable_thinking"))
         finally:
             llm_utils.config.llm_base_url = original_base
             llm_utils.config.llm_api_key = original_key
+            llm_utils.config.llm_enable_thinking = original_enable_thinking
 
     def test_custom_base_url_allows_missing_provider_key(self):
         original_base = llm_utils.config.llm_base_url
@@ -441,6 +457,59 @@ class TestLiteLlmUtils(unittest.TestCase):
                 os.environ.pop("OPENAI_API_KEY", None)
             else:
                 os.environ["OPENAI_API_KEY"] = original_env_openai_key
+
+    def test_ask_llm_once_uses_configured_two_layer_and_disables_thinking_on_second_pass(self):
+        original_base = llm_utils.config.llm_base_url
+        original_key = llm_utils.config.llm_api_key
+        original_two_layer = llm_utils.config.llm_two_layer_struct_convert
+        original_enable_thinking = llm_utils.config.llm_enable_thinking
+        calls = []
+
+        def fake_completion(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return {
+                    "choices": [{"message": {"content": "Pick choose 0 because safe."}}],
+                    "usage": {"total_tokens": 7},
+                }
+            return {
+                "choices": [{"message": {"content": '{"proposed_command":"choose 0","confidence":0.8,"explanation":"converted"}'}}],
+                "usage": {"total_tokens": 5},
+            }
+
+        try:
+            llm_utils.config.llm_base_url = "http://127.0.0.1:8000/v1"
+            llm_utils.config.llm_api_key = "test-local-secret"
+            llm_utils.config.llm_two_layer_struct_convert = True
+            llm_utils.config.llm_enable_thinking = True
+
+            with patch("rs.utils.llm_utils._ensure_api_key_for_model", return_value=True), \
+                    patch("rs.utils.llm_utils.completion", side_effect=fake_completion):
+                response, total_tokens = llm_utils.ask_llm_once(
+                    message="test",
+                    model="qwen-mlx",
+                    struct=DecisionSchema,
+                    temperature=1.0,
+                    enable_cache=False,
+                )
+        finally:
+            llm_utils.config.llm_base_url = original_base
+            llm_utils.config.llm_api_key = original_key
+            llm_utils.config.llm_two_layer_struct_convert = original_two_layer
+            llm_utils.config.llm_enable_thinking = original_enable_thinking
+
+        self.assertIsInstance(response, DecisionSchema)
+        self.assertEqual(12, total_tokens)
+        self.assertEqual(2, len(calls))
+        self.assertEqual(
+            True,
+            calls[0].get("extra_body", {}).get("chat_template_kwargs", {}).get("enable_thinking"),
+        )
+        self.assertEqual(
+            False,
+            calls[1].get("extra_body", {}).get("chat_template_kwargs", {}).get("enable_thinking"),
+        )
+        self.assertIs(DecisionSchema, calls[1]["response_format"])
 
 
 if __name__ == "__main__":

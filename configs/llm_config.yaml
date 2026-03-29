@@ -10,6 +10,8 @@ max_retries: 1
 confidence_threshold: 0.0
 telemetry_enabled: true
 telemetry_path: logs/llm_decisions.jsonl
+graph_trace_enabled: true
+graph_trace_path: logs/ai_player_graph.jsonl
 ai_player_graph_enabled: true
 langmem:
   enabled: true

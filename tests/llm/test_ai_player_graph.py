@@ -1,4 +1,7 @@
 import unittest
+import json
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
 from rs.llm.ai_player_graph import AIPlayerGraph
@@ -43,7 +46,12 @@ class TestAIPlayerGraph(unittest.TestCase):
     def test_event_decision_returns_commands_and_records_langmem(self):
         langmem_service = FakeLangMemService()
         graph = AIPlayerGraph(
-            config=LlmConfig(enabled=True, ai_player_graph_enabled=True, telemetry_enabled=False),
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
             langmem_service=langmem_service,
         )
         graph._event_provider = StaticProposalProvider("choose 1")
@@ -56,7 +64,12 @@ class TestAIPlayerGraph(unittest.TestCase):
 
     def test_checkpointed_short_term_memory_persists_within_run(self):
         graph = AIPlayerGraph(
-            config=LlmConfig(enabled=True, ai_player_graph_enabled=True, telemetry_enabled=False),
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
             langmem_service=FakeLangMemService(),
         )
         graph._event_provider = StaticProposalProvider("choose 1")
@@ -75,7 +88,12 @@ class TestAIPlayerGraph(unittest.TestCase):
 
     def test_invalid_graph_command_returns_none(self):
         graph = AIPlayerGraph(
-            config=LlmConfig(enabled=True, ai_player_graph_enabled=True, telemetry_enabled=False),
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
             langmem_service=FakeLangMemService(),
         )
         graph._event_provider = StaticProposalProvider("choose 99")
@@ -86,7 +104,12 @@ class TestAIPlayerGraph(unittest.TestCase):
 
     def test_battle_state_is_not_handled_by_unified_graph(self):
         graph = AIPlayerGraph(
-            config=LlmConfig(enabled=True, ai_player_graph_enabled=True, telemetry_enabled=False),
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
             langmem_service=FakeLangMemService(),
         )
 
@@ -94,6 +117,60 @@ class TestAIPlayerGraph(unittest.TestCase):
 
         self.assertFalse(graph.can_handle(state))
         self.assertIsNone(graph.decide(state))
+
+    def test_graph_trace_logs_successful_decision_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            trace_path = str(Path(tmp) / "graph_trace.jsonl")
+            graph = AIPlayerGraph(
+                config=LlmConfig(
+                    enabled=True,
+                    ai_player_graph_enabled=True,
+                    telemetry_enabled=False,
+                    graph_trace_enabled=True,
+                    graph_trace_path=trace_path,
+                ),
+                langmem_service=FakeLangMemService(),
+            )
+            graph._event_provider = StaticProposalProvider("choose 1")
+
+            state = load_resource_state("/event/divine_fountain.json")
+
+            commands = graph.decide(state)
+
+            self.assertEqual(["choose 1", "wait 30"], commands)
+            payloads = [json.loads(line) for line in Path(trace_path).read_text(encoding="utf-8").splitlines()]
+            event_types = [payload["event_type"] for payload in payloads]
+            node_names = [payload["node_name"] for payload in payloads]
+            self.assertIn("graph_decide_start", event_types)
+            self.assertIn("graph_decide_success", event_types)
+            self.assertIn("ingest_game_state", node_names)
+            self.assertIn("validate_decision", node_names)
+            self.assertIn("emit_commands", node_names)
+
+    def test_graph_trace_logs_invalid_decision_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            trace_path = str(Path(tmp) / "graph_trace.jsonl")
+            graph = AIPlayerGraph(
+                config=LlmConfig(
+                    enabled=True,
+                    ai_player_graph_enabled=True,
+                    telemetry_enabled=False,
+                    graph_trace_enabled=True,
+                    graph_trace_path=trace_path,
+                ),
+                langmem_service=FakeLangMemService(),
+            )
+            graph._event_provider = StaticProposalProvider("choose 99")
+
+            state = load_resource_state("/event/divine_fountain.json")
+
+            self.assertIsNone(graph.decide(state))
+
+            payloads = [json.loads(line) for line in Path(trace_path).read_text(encoding="utf-8").splitlines()]
+            event_types = [payload["event_type"] for payload in payloads]
+            validation_payloads = [payload for payload in payloads if payload["node_name"] == "validate_decision"]
+            self.assertIn("graph_decide_invalid_output", event_types)
+            self.assertTrue(any(payload["validation_code"] == "index_out_of_range" for payload in validation_payloads))
 
 
 if __name__ == "__main__":

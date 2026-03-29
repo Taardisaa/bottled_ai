@@ -14,6 +14,8 @@ class TestUtilsConfig(unittest.TestCase):
 
             config_path.write_text(
                 "fast_llm_model: gpt-5\n"
+                "llm_enable_thinking: true\n"
+                "llm_two_layer_struct_convert: true\n"
                 "dataset_dir_path: dataset_local\n"
                 "cache:\n"
                 "  load_options:\n"
@@ -39,6 +41,8 @@ class TestUtilsConfig(unittest.TestCase):
                 "OPENROUTER_BASE_URL",
                 "LLM_BASE_URL",
                 "LLM_API_KEY",
+                "LLM_ENABLE_THINKING",
+                "LLM_TWO_LAYER_STRUCT_CONVERT",
             ]
             previous = {key: os.environ.get(key) for key in env_keys}
             try:
@@ -53,6 +57,8 @@ class TestUtilsConfig(unittest.TestCase):
                         os.environ[key] = value
 
             self.assertEqual("gpt-5", loaded.fast_llm_model)
+            self.assertTrue(loaded.llm_enable_thinking)
+            self.assertTrue(loaded.llm_two_layer_struct_convert)
             self.assertEqual("dataset_local", loaded.dataset_dir_path)
             self.assertEqual("test-openai", loaded.openai_key)
             self.assertEqual("test-anthropic", loaded.anthropic_key)

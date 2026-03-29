@@ -12,6 +12,7 @@ from rs.game.path import PathHandlerConfig
 from rs.game.screen_type import ScreenType
 from rs.llm.agents.base_agent import AgentContext, AgentDecision
 from rs.llm.config import LlmConfig, load_llm_config
+from rs.llm.graph_trace import build_graph_trace_record, mirror_graph_trace_to_run_log, write_graph_trace
 from rs.llm.langmem_service import LangMemService, get_langmem_service
 from rs.llm.providers.card_reward_llm_provider import CardRewardLlmProvider
 from rs.llm.providers.event_llm_provider import EventLlmProvider
@@ -91,35 +92,101 @@ class AIPlayerGraph:
 
     def decide(self, state: GameState) -> list[str] | None:
         if not self.is_enabled():
+            self._trace_raw_event(event_type="graph_disabled", summary="ai player graph disabled by config")
             return None
 
         context = self._build_context(state)
-        if context is None or not self._config.is_handler_enabled(context.handler_name):
+        if context is None:
+            self._trace_raw_event(
+                event_type="graph_unhandled_state",
+                screen_type=state.screen_type(),
+                summary="state not handled by ai player graph",
+            )
+            return None
+
+        thread_id = self._resolve_thread_id(context)
+        self._trace_context_event(
+            context,
+            event_type="graph_context_built",
+            thread_id=thread_id,
+            summary=(
+                f"handler={context.handler_name}, screen={context.screen_type}, "
+                f"choices={len(context.choice_list)}, commands={len(context.available_commands)}"
+            ),
+        )
+
+        if not self._config.is_handler_enabled(context.handler_name):
+            self._trace_context_event(
+                context,
+                event_type="graph_handler_disabled",
+                thread_id=thread_id,
+                summary=f"handler {context.handler_name} disabled in config",
+            )
             return None
 
         graph_input: Dict[str, Any] = {
             "context_payload": self._serialize_context(context),
         }
-        thread_id = self._resolve_thread_id(context)
         started_at = time.perf_counter()
         output: Dict[str, Any] | None = None
+        self._trace_context_event(
+            context,
+            event_type="graph_decide_start",
+            thread_id=thread_id,
+            summary=f"starting graph decision for {context.handler_name}",
+        )
 
         for attempt in range(self._config.max_retries + 1):
             try:
+                self._trace_context_event(
+                    context,
+                    event_type="graph_attempt_start",
+                    thread_id=thread_id,
+                    summary=f"attempt={attempt + 1}",
+                    metadata={"attempt": attempt + 1},
+                )
                 output = self._invoke_with_timeout(graph_input, thread_id)
                 break
-            except FutureTimeoutError:
+            except FutureTimeoutError as exc:
+                self._trace_context_event(
+                    context,
+                    event_type="graph_attempt_timeout",
+                    thread_id=thread_id,
+                    summary=f"attempt {attempt + 1} timed out",
+                    metadata={"attempt": attempt + 1, "exception": type(exc).__name__, "message": str(exc)},
+                )
                 if attempt >= self._config.max_retries:
                     return None
-            except Exception:
+            except Exception as exc:
+                self._trace_context_event(
+                    context,
+                    event_type="graph_attempt_exception",
+                    thread_id=thread_id,
+                    summary=f"attempt {attempt + 1} raised {type(exc).__name__}",
+                    metadata={"attempt": attempt + 1, "exception": type(exc).__name__, "message": str(exc)},
+                )
                 if attempt >= self._config.max_retries:
                     return None
 
         if output is None or not bool(output.get("decision_valid")):
+            self._trace_output_event(
+                context,
+                output,
+                event_type="graph_decide_invalid_output",
+                thread_id=thread_id,
+                summary="graph output missing or decision invalid",
+            )
             return None
 
         commands = output.get("commands")
         if not isinstance(commands, list) or not commands:
+            self._trace_output_event(
+                context,
+                output,
+                event_type="graph_decide_no_commands",
+                thread_id=thread_id,
+                summary="graph output did not contain executable commands",
+            )
             return None
 
         decision_context = self._deserialize_context(
@@ -142,6 +209,14 @@ class AIPlayerGraph:
             except Exception:
                 pass
 
+        self._trace_output_event(
+            decision_context,
+            output,
+            event_type="graph_decide_success",
+            thread_id=thread_id,
+            summary=f"commands={self._safe_preview(commands, 120)}",
+            metadata={"commands": [str(command) for command in commands]},
+        )
         return [str(command) for command in commands]
 
     def get_compiled_graph(self) -> Any:
@@ -195,6 +270,175 @@ class AIPlayerGraph:
             future = executor.submit(graph.invoke, graph_input, config=config)
             return dict(future.result(timeout=timeout_seconds))
 
+    def _trace_enabled(self) -> bool:
+        return bool(self._config.graph_trace_enabled)
+
+    def _safe_preview(self, value: Any, limit: int = 160) -> str:
+        text = str(value).replace("\r", " ").replace("\n", " ").strip()
+        if len(text) <= limit:
+            return text
+        return text[: max(0, limit - 3)] + "..."
+
+    def _run_id_from_context(self, context: AgentContext) -> str:
+        run_id = str(context.extras.get("run_id", "")).strip()
+        if run_id != "":
+            return run_id
+        return self._resolve_thread_id(context)
+
+    def _trace_record(self, **kwargs: Any) -> None:
+        if not self._trace_enabled():
+            return
+        record = build_graph_trace_record(**kwargs)
+        try:
+            write_graph_trace(record, self._config.graph_trace_path)
+            mirror_graph_trace_to_run_log(record)
+        except Exception:
+            pass
+
+    def _trace_raw_event(
+            self,
+            *,
+            event_type: str,
+            thread_id: str = "",
+            run_id: str = "",
+            handler_name: str = "",
+            screen_type: str = "",
+            node_name: str = "",
+            route_name: str = "",
+            decision_valid: bool | None = None,
+            validation_code: str = "",
+            proposed_command: str | None = None,
+            confidence: float | None = None,
+            summary: str = "",
+            metadata: Dict[str, Any] | None = None,
+    ) -> None:
+        self._trace_record(
+            thread_id=thread_id,
+            run_id=run_id,
+            handler_name=handler_name,
+            screen_type=screen_type,
+            event_type=event_type,
+            node_name=node_name,
+            route_name=route_name,
+            decision_valid=decision_valid,
+            validation_code=validation_code,
+            proposed_command=proposed_command,
+            confidence=confidence,
+            summary=self._safe_preview(summary, 220),
+            metadata=dict(metadata or {}),
+        )
+
+    def _trace_context_event(
+            self,
+            context: AgentContext,
+            *,
+            event_type: str,
+            thread_id: str | None = None,
+            node_name: str = "",
+            route_name: str = "",
+            decision_valid: bool | None = None,
+            validation_code: str = "",
+            proposed_command: str | None = None,
+            confidence: float | None = None,
+            summary: str = "",
+            metadata: Dict[str, Any] | None = None,
+    ) -> None:
+        resolved_thread_id = self._resolve_thread_id(context) if thread_id is None else thread_id
+        self._trace_raw_event(
+            thread_id=resolved_thread_id,
+            run_id=self._run_id_from_context(context),
+            handler_name=context.handler_name,
+            screen_type=context.screen_type,
+            event_type=event_type,
+            node_name=node_name,
+            route_name=route_name,
+            decision_valid=decision_valid,
+            validation_code=validation_code,
+            proposed_command=proposed_command,
+            confidence=confidence,
+            summary=summary,
+            metadata=metadata,
+        )
+
+    def _trace_state_event(
+            self,
+            state: AIPlayerGraphState,
+            *,
+            event_type: str,
+            node_name: str,
+            summary: str = "",
+            metadata: Dict[str, Any] | None = None,
+            route_name: str | None = None,
+            decision_valid: bool | None = None,
+            validation_code: str | None = None,
+            proposed_command: str | None = None,
+            confidence: float | None = None,
+    ) -> None:
+        payload = cast(dict[str, Any], state.get("decision_context_payload", state.get("context_payload", {})))
+        if not payload:
+            self._trace_raw_event(
+                thread_id=str(state.get("run_id", "")),
+                run_id=str(state.get("run_id", "")),
+                handler_name=str(state.get("handler_name", "")),
+                screen_type=str(state.get("screen_type", "")),
+                event_type=event_type,
+                node_name=node_name,
+                route_name=str(route_name if route_name is not None else state.get("route_name", "")),
+                decision_valid=decision_valid if decision_valid is not None else cast(bool | None, state.get("decision_valid")),
+                validation_code=(
+                    str(validation_code) if validation_code is not None else str(state.get("validation_code", ""))
+                ),
+                proposed_command=proposed_command if proposed_command is not None else cast(str | None, state.get("proposed_command")),
+                confidence=confidence if confidence is not None else self._coerce_float(state.get("confidence")),
+                summary=summary,
+                metadata=metadata,
+            )
+            return
+
+        context = self._deserialize_context(payload)
+        self._trace_context_event(
+            context,
+            event_type=event_type,
+            thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(context),
+            node_name=node_name,
+            route_name=str(route_name if route_name is not None else state.get("route_name", "")),
+            decision_valid=decision_valid if decision_valid is not None else cast(bool | None, state.get("decision_valid")),
+            validation_code=(
+                str(validation_code) if validation_code is not None else str(state.get("validation_code", ""))
+            ),
+            proposed_command=proposed_command if proposed_command is not None else cast(str | None, state.get("proposed_command")),
+            confidence=confidence if confidence is not None else self._coerce_float(state.get("confidence")),
+            summary=summary,
+            metadata=metadata,
+        )
+
+    def _trace_output_event(
+            self,
+            context: AgentContext,
+            output: Dict[str, Any] | None,
+            *,
+            event_type: str,
+            thread_id: str,
+            summary: str,
+            metadata: Dict[str, Any] | None = None,
+    ) -> None:
+        payload = output or {}
+        merged_metadata = dict(metadata or {})
+        if payload.get("commands") is not None:
+            merged_metadata.setdefault("commands", payload.get("commands"))
+        self._trace_context_event(
+            context,
+            event_type=event_type,
+            thread_id=thread_id,
+            route_name=str(payload.get("route_name", "")),
+            decision_valid=cast(bool | None, payload.get("decision_valid")),
+            validation_code=str(payload.get("validation_code", "")),
+            proposed_command=cast(str | None, payload.get("proposed_command")),
+            confidence=self._coerce_float(payload.get("confidence")),
+            summary=summary,
+            metadata=merged_metadata,
+        )
+
     def _build_context(self, state: GameState) -> AgentContext | None:
         if state.screen_type() == ScreenType.EVENT.value and state.has_command(Command.CHOOSE):
             return build_event_agent_context(state, "EventHandler")
@@ -236,6 +480,12 @@ class AIPlayerGraph:
         return f"{strategy_name}:{character_class}"
 
     def _ingest_game_state_node(self, state: AIPlayerGraphState) -> Dict[str, Any]:
+        self._trace_state_event(
+            state,
+            event_type="node_enter",
+            node_name="ingest_game_state",
+            summary="building short-term run state",
+        )
         context = self._deserialize_context(state["context_payload"])
         recent_key_decisions = self._trim_recent_decisions(state.get("recent_key_decisions", []))
         current_priorities = self._build_current_priorities(context)
@@ -249,7 +499,7 @@ class AIPlayerGraph:
             risk_flags,
             deck_direction,
         )
-        return {
+        result = {
             "handler_name": context.handler_name,
             "run_id": self._resolve_thread_id(context),
             "strategy_name": str(context.extras.get("strategy_name", "unknown")),
@@ -275,58 +525,201 @@ class AIPlayerGraph:
             "validation_message": "not_decided",
             "commands": None,
         }
+        self._trace_context_event(
+            context,
+            event_type="node_exit",
+            thread_id=result["run_id"],
+            node_name="ingest_game_state",
+            summary=(
+                f"act={result['act']}, floor={result['floor']}, priorities={current_priorities}, "
+                f"risks={risk_flags}, deck_direction={deck_direction}"
+            ),
+            metadata={
+                "current_priorities": list(current_priorities),
+                "risk_flags": list(risk_flags),
+                "deck_direction": deck_direction,
+            },
+        )
+        return result
 
     def _retrieve_long_term_memory_node(self, state: AIPlayerGraphState) -> Dict[str, Any]:
+        self._trace_state_event(
+            state,
+            event_type="node_enter",
+            node_name="retrieve_long_term_memory",
+            summary="loading langmem context",
+        )
         decision_context = self._build_decision_context_from_state(state)
         payload = self._langmem_service.build_context_memory(decision_context)
-        return {
+        result = {
             "decision_context_payload": self._serialize_context(decision_context),
             "retrieved_episodic_memories": payload.get("retrieved_episodic_memories", "none"),
             "retrieved_semantic_memories": payload.get("retrieved_semantic_memories", "none"),
             "langmem_status": payload.get("langmem_status", self._langmem_service.status()),
         }
+        self._trace_context_event(
+            decision_context,
+            event_type="node_exit",
+            thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(decision_context),
+            node_name="retrieve_long_term_memory",
+            route_name=str(state.get("route_name", "")),
+            summary=(
+                f"langmem_status={result['langmem_status']}, episodic_len="
+                f"{len(str(result['retrieved_episodic_memories']))}, semantic_len="
+                f"{len(str(result['retrieved_semantic_memories']))}"
+            ),
+            metadata={
+                "langmem_status": result["langmem_status"],
+                "episodic_preview": self._safe_preview(result["retrieved_episodic_memories"], 120),
+                "semantic_preview": self._safe_preview(result["retrieved_semantic_memories"], 120),
+            },
+        )
+        return result
 
     def _route_decision_type_node(self, state: AIPlayerGraphState) -> Dict[str, Any]:
+        self._trace_state_event(
+            state,
+            event_type="node_enter",
+            node_name="route_decision_type",
+            summary="routing graph by handler name",
+        )
         route_map: dict[str, GraphRoute] = {
             "EventHandler": "decide_event",
             "ShopPurchaseHandler": "decide_shop",
             "CardRewardHandler": "decide_card_reward",
             "MapHandler": "decide_map",
         }
-        return {"route_name": route_map.get(str(state.get("handler_name", "")), "decide_fallback")}
+        result = {"route_name": route_map.get(str(state.get("handler_name", "")), "decide_fallback")}
+        self._trace_state_event(
+            state,
+            event_type="node_exit",
+            node_name="route_decision_type",
+            route_name=result["route_name"],
+            summary=f"resolved route {result['route_name']}",
+        )
+        return result
 
     def _route_to_node(self, state: AIPlayerGraphState) -> GraphRoute:
         return cast(GraphRoute, state.get("route_name", "decide_fallback"))
 
     def _decide_event_node(self, state: AIPlayerGraphState) -> Dict[str, Any]:
+        self._trace_state_event(state, event_type="node_enter", node_name="decide_event", summary="requesting event proposal")
         decision_context = self._build_decision_context_from_state(state)
         proposal = self._event_provider.propose(decision_context)
-        return self._proposal_update(decision_context, proposal.proposed_command, proposal.confidence, proposal.explanation, proposal.metadata)
+        result = self._proposal_update(decision_context, proposal.proposed_command, proposal.confidence, proposal.explanation, proposal.metadata)
+        self._trace_context_event(
+            decision_context,
+            event_type="node_exit",
+            thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(decision_context),
+            node_name="decide_event",
+            route_name=str(state.get("route_name", "")),
+            proposed_command=proposal.proposed_command,
+            confidence=proposal.confidence,
+            summary=(
+                f"proposal={proposal.proposed_command}, confidence={proposal.confidence:.2f}, "
+                f"explanation={self._safe_preview(proposal.explanation, 100)}"
+            ),
+            metadata={"provider_metadata": dict(proposal.metadata)},
+        )
+        return result
 
     def _decide_shop_node(self, state: AIPlayerGraphState) -> Dict[str, Any]:
+        self._trace_state_event(state, event_type="node_enter", node_name="decide_shop", summary="requesting shop proposal")
         decision_context = self._build_decision_context_from_state(state)
         proposal = self._shop_provider.propose(decision_context)
-        return self._proposal_update(decision_context, proposal.proposed_command, proposal.confidence, proposal.explanation, proposal.metadata)
+        result = self._proposal_update(decision_context, proposal.proposed_command, proposal.confidence, proposal.explanation, proposal.metadata)
+        self._trace_context_event(
+            decision_context,
+            event_type="node_exit",
+            thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(decision_context),
+            node_name="decide_shop",
+            route_name=str(state.get("route_name", "")),
+            proposed_command=proposal.proposed_command,
+            confidence=proposal.confidence,
+            summary=(
+                f"proposal={proposal.proposed_command}, confidence={proposal.confidence:.2f}, "
+                f"explanation={self._safe_preview(proposal.explanation, 100)}"
+            ),
+            metadata={"provider_metadata": dict(proposal.metadata)},
+        )
+        return result
 
     def _decide_card_reward_node(self, state: AIPlayerGraphState) -> Dict[str, Any]:
+        self._trace_state_event(
+            state,
+            event_type="node_enter",
+            node_name="decide_card_reward",
+            summary="requesting card reward proposal",
+        )
         decision_context = self._build_decision_context_from_state(state)
         proposal = self._card_reward_provider.propose(decision_context)
-        return self._proposal_update(decision_context, proposal.proposed_command, proposal.confidence, proposal.explanation, proposal.metadata)
+        result = self._proposal_update(decision_context, proposal.proposed_command, proposal.confidence, proposal.explanation, proposal.metadata)
+        self._trace_context_event(
+            decision_context,
+            event_type="node_exit",
+            thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(decision_context),
+            node_name="decide_card_reward",
+            route_name=str(state.get("route_name", "")),
+            proposed_command=proposal.proposed_command,
+            confidence=proposal.confidence,
+            summary=(
+                f"proposal={proposal.proposed_command}, confidence={proposal.confidence:.2f}, "
+                f"explanation={self._safe_preview(proposal.explanation, 100)}"
+            ),
+            metadata={"provider_metadata": dict(proposal.metadata)},
+        )
+        return result
 
     def _decide_map_node(self, state: AIPlayerGraphState) -> Dict[str, Any]:
+        self._trace_state_event(state, event_type="node_enter", node_name="decide_map", summary="requesting map proposal")
         decision_context = self._build_decision_context_from_state(state)
         proposal = self._map_provider.propose(decision_context)
-        return self._proposal_update(decision_context, proposal.proposed_command, proposal.confidence, proposal.explanation, proposal.metadata)
+        result = self._proposal_update(decision_context, proposal.proposed_command, proposal.confidence, proposal.explanation, proposal.metadata)
+        self._trace_context_event(
+            decision_context,
+            event_type="node_exit",
+            thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(decision_context),
+            node_name="decide_map",
+            route_name=str(state.get("route_name", "")),
+            proposed_command=proposal.proposed_command,
+            confidence=proposal.confidence,
+            summary=(
+                f"proposal={proposal.proposed_command}, confidence={proposal.confidence:.2f}, "
+                f"explanation={self._safe_preview(proposal.explanation, 100)}"
+            ),
+            metadata={"provider_metadata": dict(proposal.metadata)},
+        )
+        return result
 
     def _decide_fallback_node(self, _state: AIPlayerGraphState) -> Dict[str, Any]:
-        return {
+        self._trace_state_event(
+            _state,
+            event_type="node_enter",
+            node_name="decide_fallback",
+            summary="falling back because no supported route matched",
+        )
+        result = {
             "proposed_command": None,
             "confidence": 0.0,
             "explanation": "unsupported_decision_type",
             "metadata": {"validation_error": "unsupported_decision_type"},
         }
+        self._trace_state_event(
+            _state,
+            event_type="node_exit",
+            node_name="decide_fallback",
+            summary="fallback produced no command",
+            metadata=result["metadata"],
+        )
+        return result
 
     def _validate_decision_node(self, state: AIPlayerGraphState) -> Dict[str, Any]:
+        self._trace_state_event(
+            state,
+            event_type="node_enter",
+            node_name="validate_decision",
+            summary="validating proposed command",
+        )
         decision_context = self._build_decision_context_from_state(state)
         metadata = dict(state.get("metadata", {}))
         proposed_command = state.get("proposed_command")
@@ -334,7 +727,7 @@ class AIPlayerGraph:
 
         if proposed_command is None:
             metadata["validation_error"] = "empty_command"
-            return {
+            result = {
                 "decision_valid": False,
                 "validation_code": "empty_command",
                 "validation_message": "command is empty",
@@ -342,10 +735,24 @@ class AIPlayerGraph:
                 "metadata": metadata,
                 "decision_context_payload": self._serialize_context(decision_context),
             }
+            self._trace_context_event(
+                decision_context,
+                event_type="node_exit",
+                thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(decision_context),
+                node_name="validate_decision",
+                route_name=str(state.get("route_name", "")),
+                decision_valid=False,
+                validation_code="empty_command",
+                proposed_command=None,
+                confidence=confidence,
+                summary="validation failed: command is empty",
+                metadata=metadata,
+            )
+            return result
 
         if confidence < self._config.confidence_threshold:
             metadata["validation_error"] = "low_confidence"
-            return {
+            result = {
                 "decision_valid": False,
                 "validation_code": "low_confidence",
                 "validation_message": "confidence below threshold",
@@ -353,12 +760,26 @@ class AIPlayerGraph:
                 "metadata": metadata,
                 "decision_context_payload": self._serialize_context(decision_context),
             }
+            self._trace_context_event(
+                decision_context,
+                event_type="node_exit",
+                thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(decision_context),
+                node_name="validate_decision",
+                route_name=str(state.get("route_name", "")),
+                decision_valid=False,
+                validation_code="low_confidence",
+                proposed_command=proposed_command,
+                confidence=confidence,
+                summary="validation failed: confidence below threshold",
+                metadata=metadata,
+            )
+            return result
 
         validation = validate_command(decision_context, proposed_command)
         metadata["validation_error"] = validation.code
         if not validation.is_valid:
             metadata["validation_message"] = validation.message
-            return {
+            result = {
                 "decision_valid": False,
                 "validation_code": validation.code,
                 "validation_message": validation.message,
@@ -366,11 +787,25 @@ class AIPlayerGraph:
                 "metadata": metadata,
                 "decision_context_payload": self._serialize_context(decision_context),
             }
+            self._trace_context_event(
+                decision_context,
+                event_type="node_exit",
+                thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(decision_context),
+                node_name="validate_decision",
+                route_name=str(state.get("route_name", "")),
+                decision_valid=False,
+                validation_code=validation.code,
+                proposed_command=proposed_command,
+                confidence=confidence,
+                summary=f"validation failed: {self._safe_preview(validation.message, 120)}",
+                metadata=metadata,
+            )
+            return result
 
         commands = self._commands_for_context(decision_context, proposed_command)
         if commands is None:
             metadata["validation_error"] = "unsupported_command_mapping"
-            return {
+            result = {
                 "decision_valid": False,
                 "validation_code": "unsupported_command_mapping",
                 "validation_message": "no execution mapping for validated command",
@@ -378,8 +813,22 @@ class AIPlayerGraph:
                 "metadata": metadata,
                 "decision_context_payload": self._serialize_context(decision_context),
             }
+            self._trace_context_event(
+                decision_context,
+                event_type="node_exit",
+                thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(decision_context),
+                node_name="validate_decision",
+                route_name=str(state.get("route_name", "")),
+                decision_valid=False,
+                validation_code="unsupported_command_mapping",
+                proposed_command=proposed_command,
+                confidence=confidence,
+                summary="validation failed: no execution mapping for command",
+                metadata=metadata,
+            )
+            return result
 
-        return {
+        result = {
             "decision_valid": True,
             "validation_code": validation.code,
             "validation_message": validation.message,
@@ -387,14 +836,48 @@ class AIPlayerGraph:
             "metadata": metadata,
             "decision_context_payload": self._serialize_context(decision_context),
         }
+        self._trace_context_event(
+            decision_context,
+            event_type="node_exit",
+            thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(decision_context),
+            node_name="validate_decision",
+            route_name=str(state.get("route_name", "")),
+            decision_valid=True,
+            validation_code=validation.code,
+            proposed_command=proposed_command,
+            confidence=confidence,
+            summary=f"validation ok, commands={self._safe_preview(commands, 100)}",
+            metadata={"commands": list(commands), **metadata},
+        )
+        return result
 
     def _commit_short_term_memory_node(self, state: AIPlayerGraphState) -> Dict[str, Any]:
+        self._trace_state_event(
+            state,
+            event_type="node_enter",
+            node_name="commit_short_term_memory",
+            summary="updating short-term memory",
+        )
         if not bool(state.get("decision_valid")):
+            self._trace_state_event(
+                state,
+                event_type="node_exit",
+                node_name="commit_short_term_memory",
+                summary="skipped because decision is invalid",
+            )
             return {}
 
         decision_context = self._deserialize_context(cast(dict[str, Any], state.get("decision_context_payload", state["context_payload"])))
         proposed_command = state.get("proposed_command")
         if proposed_command is None:
+            self._trace_context_event(
+                decision_context,
+                event_type="node_exit",
+                thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(decision_context),
+                node_name="commit_short_term_memory",
+                route_name=str(state.get("route_name", "")),
+                summary="skipped because proposed command is empty",
+            )
             return {}
 
         decision = AgentDecision(
@@ -425,13 +908,42 @@ class AIPlayerGraph:
             cast(list[str], state.get("risk_flags", [])),
             str(state.get("deck_direction", "unknown")),
         )
-        return {
+        result = {
             "recent_key_decisions": recent_key_decisions,
             "distilled_run_summary": distilled_run_summary,
         }
+        self._trace_context_event(
+            decision_context,
+            event_type="node_exit",
+            thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(decision_context),
+            node_name="commit_short_term_memory",
+            route_name=str(state.get("route_name", "")),
+            proposed_command=proposed_command,
+            confidence=float(state.get("confidence", 0.0)),
+            summary=f"recorded decision, recent_count={len(recent_key_decisions)}",
+            metadata={
+                "recent_count": len(recent_key_decisions),
+                "recent_preview": self._safe_preview(self._format_recent_decisions(recent_key_decisions), 140),
+            },
+        )
+        return result
 
     def _emit_commands_node(self, state: AIPlayerGraphState) -> Dict[str, Any]:
-        return {"commands": state.get("commands")}
+        self._trace_state_event(
+            state,
+            event_type="node_enter",
+            node_name="emit_commands",
+            summary="emitting final commands",
+        )
+        result = {"commands": state.get("commands")}
+        self._trace_state_event(
+            state,
+            event_type="node_exit",
+            node_name="emit_commands",
+            summary=f"commands={self._safe_preview(result['commands'], 120)}",
+            metadata={"commands": result["commands"]},
+        )
+        return result
 
     def _proposal_update(
             self,
@@ -613,5 +1125,11 @@ class AIPlayerGraph:
     def _coerce_int(self, value: Any) -> int | None:
         try:
             return None if value is None else int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _coerce_float(self, value: Any) -> float | None:
+        try:
+            return None if value is None else float(value)
         except (TypeError, ValueError):
             return None

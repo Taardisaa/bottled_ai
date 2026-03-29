@@ -218,6 +218,10 @@ def _get_litellm_token_count(text: str, model: str) -> int:
 
 
 def _log_tokenizer_fallback(model: str, source: str, error: Exception) -> None:
+    normalized_key = _normalized_model_token_limit_key(model)
+    if source == "LiteLLM max-token lookup" and normalized_key in MODEL_TOKEN_LIMITS:
+        return
+
     normalized = _normalize_model_for_tokenizer(model)
     message = f"{source} tokenizer lookup failed for {model}: {error}"
     if normalized != str(model).strip():
@@ -249,6 +253,7 @@ def _decode_tokens_with_model_tokenizer(token_ids: list[int], model: str, codec_
 
 
 def _litellm_completion_kwargs(model: str, temperature: float, **extra_kwargs: Any) -> Dict[str, Any]:
+    enable_thinking = extra_kwargs.pop("enable_thinking", None)
     normalized_model = _normalize_model_for_litellm(model)
     kwargs: Dict[str, Any] = {
         "model": normalized_model,
@@ -267,7 +272,31 @@ def _litellm_completion_kwargs(model: str, temperature: float, **extra_kwargs: A
     for key, value in extra_kwargs.items():
         if value is not None:
             kwargs[key] = value
+
+    if _should_send_qwen_thinking_toggle(model):
+        effective_enable_thinking = config.llm_enable_thinking if enable_thinking is None else bool(enable_thinking)
+        kwargs["extra_body"] = _merge_extra_body(
+            kwargs.get("extra_body"),
+            {"chat_template_kwargs": {"enable_thinking": effective_enable_thinking}},
+        )
     return kwargs
+
+
+def _should_send_qwen_thinking_toggle(model: str) -> bool:
+    normalized = _normalize_model_for_tokenizer(model).lower()
+    return _has_custom_base_url() and "qwen" in normalized
+
+
+def _merge_extra_body(existing: Any, additions: Dict[str, Any]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+    for key, value in additions.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            nested = dict(merged[key])
+            nested.update(value)
+            merged[key] = nested
+        else:
+            merged[key] = value
+    return merged
 
 
 def _call_litellm_quietly(function: Any, *args: Any, **kwargs: Any) -> Any:
@@ -674,7 +703,11 @@ def _ask_llm_once_two_layer(
         temperature: float,
 ) -> Tuple[Optional[LLMLoadedResponse], int]:
     first_temperature = _normalize_temperature_for_model(model, temperature)
-    first_kwargs = _litellm_completion_kwargs(model, first_temperature)
+    first_kwargs = _litellm_completion_kwargs(
+        model,
+        first_temperature,
+        enable_thinking=config.llm_enable_thinking,
+    )
     first_raw = _call_litellm_quietly(
         completion,
         messages=[{"role": "user", "content": message}],
@@ -704,11 +737,12 @@ def _ask_llm_once_two_layer(
     if not _ensure_api_key_for_model(conversion_model):
         return None, first_tokens
 
-    second_temperature = _normalize_temperature_for_model(conversion_model, temperature)
+    second_temperature = _normalize_temperature_for_model(conversion_model, 0.0)
     second_prompt = _build_struct_convert_prompt(first_content_text, struct)
     second_kwargs = _litellm_completion_kwargs(
         conversion_model,
         second_temperature,
+        enable_thinking=False,
         response_format=struct,
     )
 
@@ -731,7 +765,7 @@ def ask_llm_once(message: str,
                  temperature: float = 0.0,
                  cache_namespace: Optional[str] = None,
                  enable_cache: bool = True,
-                 two_layer_struct_convert: bool = False) -> Tuple[Optional[LLMLoadedResponse], int]:
+                 two_layer_struct_convert: Optional[bool] = None) -> Tuple[Optional[LLMLoadedResponse], int]:
     """Ask a question to the LLM and get the response.
 
     Args:
@@ -744,9 +778,9 @@ def ask_llm_once(message: str,
             isolate final patch checking results per config profile. Defaults to None.
         enable_cache (bool, optional): Additional gate for caching. When False, bypasses cache
             entirely (no load or store). AND-ed with other cache checks. Defaults to True.
-        two_layer_struct_convert (bool, optional): When True and `struct` is provided,
+        two_layer_struct_convert (Optional[bool], optional): When True and `struct` is provided,
             process each message through `ask_llm_once` with two-layer conversion.
-            Defaults to True.
+            When None, uses config.llm_two_layer_struct_convert. Defaults to None.
 
     Returns:
         A tuple of (response from the LLM, total tokens used).
@@ -759,6 +793,11 @@ def ask_llm_once(message: str,
             return None, 0
 
         temperature = _normalize_temperature_for_model(model, temperature)
+        use_two_layer_struct_convert = (
+            config.llm_two_layer_struct_convert
+            if two_layer_struct_convert is None
+            else bool(two_layer_struct_convert)
+        )
 
         # Truncate message if it exceeds token limit
         original_message = message
@@ -777,7 +816,7 @@ def ask_llm_once(message: str,
             if cached_response is not None:
                 return cached_response, 0  # Cached responses don't cost tokens
 
-        if two_layer_struct_convert and struct is not None:
+        if use_two_layer_struct_convert and struct is not None:
             response_to_return, total_tokens = _ask_llm_once_two_layer(
                 message=message,
                 model=model,
@@ -786,7 +825,12 @@ def ask_llm_once(message: str,
             )
         else:
             response_format = struct if struct is not None and isinstance(struct, type) and issubclass(struct, BaseModel) else None
-            completion_kwargs = _litellm_completion_kwargs(model, temperature, response_format=response_format)
+            completion_kwargs = _litellm_completion_kwargs(
+                model,
+                temperature,
+                response_format=response_format,
+                enable_thinking=config.llm_enable_thinking,
+            )
 
             raw_response = _call_litellm_quietly(
                 completion,
@@ -818,7 +862,7 @@ def ask_llm_multi(messages: Sequence[Optional[str]], model: str = "gpt-5-mini",
                   temperature: float = 0.0,
                   cache_namespace: Optional[str] = None,
                   enable_cache: bool = True,
-                  two_layer_struct_convert: bool = False) -> Tuple[List[Optional[LLMLoadedResponse]], int]:
+                  two_layer_struct_convert: Optional[bool] = None) -> Tuple[List[Optional[LLMLoadedResponse]], int]:
     """Ask multiple questions to the LLM and get responses in batch.
 
     Args:
@@ -830,9 +874,10 @@ def ask_llm_multi(messages: Sequence[Optional[str]], model: str = "gpt-5-mini",
             under this namespace (stored in a subdirectory). Defaults to None.
         enable_cache (bool, optional): Additional gate for caching. When False, bypasses cache
             entirely (no load or store). AND-ed with other cache checks. Defaults to True.
-        two_layer_struct_convert (bool, optional): When True and `struct` is provided,
+        two_layer_struct_convert (Optional[bool], optional): When True and `struct` is provided,
             first call the target model without structured output and then run a
-            second conversion pass into the requested schema. Defaults to False.
+            second conversion pass into the requested schema. When None, uses
+            config.llm_two_layer_struct_convert. Defaults to None.
 
     Returns:
         A tuple of (list of responses from the LLM in the same order as input messages, total tokens used).
@@ -845,8 +890,13 @@ def ask_llm_multi(messages: Sequence[Optional[str]], model: str = "gpt-5-mini",
             return [None] * len(messages), 0
 
         temperature = _normalize_temperature_for_model(model, temperature)
+        use_two_layer_struct_convert = (
+            config.llm_two_layer_struct_convert
+            if two_layer_struct_convert is None
+            else bool(two_layer_struct_convert)
+        )
 
-        if two_layer_struct_convert and struct is not None:
+        if use_two_layer_struct_convert and struct is not None:
             responses: List[Optional[LLMLoadedResponse]] = [None] * len(messages)
             total_tokens = 0
             for i, message in enumerate(messages):
@@ -898,7 +948,12 @@ def ask_llm_multi(messages: Sequence[Optional[str]], model: str = "gpt-5-mini",
         batch_payload = [[{"role": "user", "content": msg}] for msg in truncated_messages]
 
         response_format = struct if struct is not None and isinstance(struct, type) and issubclass(struct, BaseModel) else None
-        completion_kwargs = _litellm_completion_kwargs(model, temperature, response_format=response_format)
+        completion_kwargs = _litellm_completion_kwargs(
+            model,
+            temperature,
+            response_format=response_format,
+            enable_thinking=config.llm_enable_thinking,
+        )
 
         total_tokens = 0
         parsed_responses: List[Optional[LLMLoadedResponse]] = []

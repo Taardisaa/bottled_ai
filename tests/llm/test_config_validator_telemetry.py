@@ -6,6 +6,7 @@ from pathlib import Path
 
 from rs.llm.agents.base_agent import AgentContext, AgentDecision
 from rs.llm.config import load_llm_config
+from rs.llm.graph_trace import build_graph_trace_record, write_graph_trace
 from rs.llm.telemetry import build_decision_telemetry, write_decision_telemetry
 from rs.llm.validator import validate_command
 
@@ -25,6 +26,8 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                     "confidence_threshold: 0.55",
                     "telemetry_enabled: false",
                     "telemetry_path: logs/custom.jsonl",
+                    "graph_trace_enabled: true",
+                    "graph_trace_path: logs/graph.jsonl",
                     "ai_player_graph_enabled: true",
                 ]),
                 encoding="utf-8",
@@ -38,6 +41,8 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                 "LLM_CONFIDENCE_THRESHOLD",
                 "LLM_TELEMETRY_ENABLED",
                 "LLM_TELEMETRY_PATH",
+                "AI_PLAYER_GRAPH_TRACE_ENABLED",
+                "AI_PLAYER_GRAPH_TRACE_PATH",
                 "AI_PLAYER_GRAPH_ENABLED",
                 "LANGMEM_ENABLED",
                 "LANGMEM_SQLITE_PATH",
@@ -66,6 +71,8 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
             self.assertEqual(0.55, config.confidence_threshold)
             self.assertFalse(config.telemetry_enabled)
             self.assertEqual("logs/custom.jsonl", config.telemetry_path)
+            self.assertTrue(config.graph_trace_enabled)
+            self.assertEqual("logs/graph.jsonl", config.graph_trace_path)
             self.assertTrue(config.ai_player_graph_enabled)
             self.assertFalse(config.langmem_enabled)
             self.assertEqual("dataset/langmem/memory.sqlite3", config.langmem_sqlite_path)
@@ -82,6 +89,8 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                     "confidence_threshold: 0.4",
                     "telemetry_enabled: true",
                     "telemetry_path: logs/base.jsonl",
+                    "graph_trace_enabled: false",
+                    "graph_trace_path: logs/base_graph.jsonl",
                     "ai_player_graph_enabled: false",
                 ]),
                 encoding="utf-8",
@@ -93,6 +102,8 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                 "LLM_TIMEOUT_MS",
                 "LLM_MAX_RETRIES",
                 "LLM_CONFIDENCE_THRESHOLD",
+                "AI_PLAYER_GRAPH_TRACE_ENABLED",
+                "AI_PLAYER_GRAPH_TRACE_PATH",
                 "AI_PLAYER_GRAPH_ENABLED",
                 "LANGMEM_ENABLED",
                 "LANGMEM_SQLITE_PATH",
@@ -110,6 +121,8 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                 os.environ["LLM_TIMEOUT_MS"] = "2200"
                 os.environ["LLM_MAX_RETRIES"] = "4"
                 os.environ["LLM_CONFIDENCE_THRESHOLD"] = "0.77"
+                os.environ["AI_PLAYER_GRAPH_TRACE_ENABLED"] = "true"
+                os.environ["AI_PLAYER_GRAPH_TRACE_PATH"] = "logs/graph_override.jsonl"
                 os.environ["AI_PLAYER_GRAPH_ENABLED"] = "true"
                 os.environ["LANGMEM_ENABLED"] = "true"
                 os.environ["LANGMEM_SQLITE_PATH"] = "dataset/test_langmem.sqlite3"
@@ -133,6 +146,8 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
             self.assertEqual(2200, config.timeout_ms)
             self.assertEqual(4, config.max_retries)
             self.assertEqual(0.77, config.confidence_threshold)
+            self.assertTrue(config.graph_trace_enabled)
+            self.assertEqual("logs/graph_override.jsonl", config.graph_trace_path)
             self.assertTrue(config.ai_player_graph_enabled)
             self.assertTrue(config.langmem_enabled)
             self.assertEqual("dataset/test_langmem.sqlite3", config.langmem_sqlite_path)
@@ -196,6 +211,35 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
             self.assertEqual("EventHandler", payload["handler_name"])
             self.assertEqual("choose 0", payload["proposed_command"])
             self.assertEqual("ok", payload["validation_result"])
+
+    def test_graph_trace_writes_jsonl_record(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "ai_player_graph.jsonl"
+            record = build_graph_trace_record(
+                thread_id="run-1",
+                run_id="run-1",
+                handler_name="EventHandler",
+                screen_type="EVENT",
+                event_type="graph_decide_start",
+                node_name="ingest_game_state",
+                route_name="decide_event",
+                decision_valid=None,
+                validation_code="",
+                proposed_command=None,
+                confidence=None,
+                summary="starting graph",
+                metadata={"attempt": 1},
+            )
+
+            write_graph_trace(record, str(out_path))
+
+            lines = out_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(1, len(lines))
+            payload = json.loads(lines[0])
+            self.assertEqual("graph_decide_start", payload["event_type"])
+            self.assertEqual("ingest_game_state", payload["node_name"])
+            self.assertEqual("run-1", payload["thread_id"])
+            self.assertEqual(1, payload["metadata"]["attempt"])
 
 
 if __name__ == "__main__":
