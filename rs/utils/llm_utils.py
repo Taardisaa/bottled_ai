@@ -2,7 +2,14 @@ from pathlib import Path
 from typing import Optional, Any, Union, Tuple, List
 import os
 import json
-from litellm import completion, batch_completion
+from litellm import (
+    completion,
+    batch_completion,
+    decode as litellm_decode,
+    encode as litellm_encode,
+    get_max_tokens as litellm_get_max_tokens,
+    token_counter as litellm_token_counter,
+)
 from langchain.tools import BaseTool
 from collections.abc import Sequence
 from pydantic import BaseModel
@@ -31,6 +38,18 @@ MODEL_TOKEN_LIMITS = {
 }
 
 
+_TOKENIZER_PROVIDER_PREFIXES = {
+    "openai",
+    "openrouter",
+    "anthropic",
+    "azure",
+    "hosted_vllm",
+    "vertex_ai",
+    "bedrock",
+    "ollama",
+}
+
+
 def _is_openrouter_model(model: str) -> bool:
     return model.startswith("openrouter/")
 
@@ -47,6 +66,130 @@ def _normalize_model_for_litellm(model: str) -> str:
         return model
 
     return f"hosted_vllm/{model}"
+
+
+def _normalize_model_for_tokenizer(model: str) -> str:
+    normalized = str(model).strip()
+    if normalized == "":
+        return normalized
+
+    parts = normalized.split("/")
+    while len(parts) > 1 and parts[0].strip().lower() in _TOKENIZER_PROVIDER_PREFIXES:
+        parts = parts[1:]
+
+    return "/".join(part.strip() for part in parts if part.strip())
+
+
+def _tokenizer_model_candidates(model: str) -> list[str]:
+    normalized = _normalize_model_for_tokenizer(model)
+    candidates: list[str] = []
+    for candidate in [normalized, normalized.lower()]:
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+
+    if "/" in normalized:
+        tail = normalized.rsplit("/", 1)[-1].strip()
+        for candidate in [tail, tail.lower()]:
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+
+    return candidates
+
+
+def _fallback_encoding_name_for_model(model: str) -> str:
+    normalized = _normalize_model_for_tokenizer(model).lower()
+    modern_families = (
+        "gpt-4o",
+        "gpt-4.1",
+        "gpt-5",
+        "o1",
+        "o3",
+        "o4",
+        "qwen",
+        "deepseek",
+        "llama",
+        "claude",
+        "gemini",
+        "mistral",
+    )
+    if any(normalized.startswith(prefix) or f"/{prefix}" in normalized for prefix in modern_families):
+        return "o200k_base"
+    return "cl100k_base"
+
+
+def _get_tiktoken_encoding(model: str, log_fallback: bool = True):
+    for candidate in _tokenizer_model_candidates(model):
+        try:
+            return tiktoken.encoding_for_model(candidate)
+        except KeyError:
+            continue
+
+    fallback_encoding_name = _fallback_encoding_name_for_model(model)
+    try:
+        encoding = tiktoken.get_encoding(fallback_encoding_name)
+    except KeyError:
+        fallback_encoding_name = "cl100k_base"
+        encoding = tiktoken.get_encoding(fallback_encoding_name)
+
+    if log_fallback:
+        normalized = _normalize_model_for_tokenizer(model)
+        if normalized != str(model).strip():
+            logger.debug(
+                f"Model {model} normalized to {normalized} for token counting; "
+                f"using fallback {fallback_encoding_name} encoding"
+            )
+        else:
+            logger.warning(
+                f"Model {model} not found in tiktoken, using {fallback_encoding_name} encoding"
+            )
+    return encoding
+
+
+def _normalized_model_token_limit_key(model: str) -> str:
+    for candidate in _tokenizer_model_candidates(model):
+        lowered = candidate.lower()
+        if lowered in MODEL_TOKEN_LIMITS:
+            return lowered
+    return _normalize_model_for_tokenizer(model).lower()
+
+
+def _get_litellm_token_count(text: str, model: str) -> int:
+    normalized_model = _normalize_model_for_tokenizer(model)
+    token_count = litellm_token_counter(model=normalized_model, text=text)
+    if not isinstance(token_count, int) or token_count < 0:
+        raise ValueError(f"LiteLLM token counter returned invalid value: {token_count!r}")
+    return token_count
+
+
+def _log_tokenizer_fallback(model: str, source: str, error: Exception) -> None:
+    normalized = _normalize_model_for_tokenizer(model)
+    message = f"{source} tokenizer lookup failed for {model}: {error}"
+    if normalized != str(model).strip():
+        logger.debug(message)
+    else:
+        logger.debug(message)
+
+
+def _encode_text_with_model_tokenizer(text: str, model: str) -> tuple[list[int], str]:
+    normalized_model = _normalize_model_for_tokenizer(model)
+    try:
+        token_ids = litellm_encode(model=normalized_model, text=text)
+        if isinstance(token_ids, list):
+            return token_ids, normalized_model
+        raise ValueError(f"LiteLLM encode returned invalid value: {token_ids!r}")
+    except Exception as e:
+        _log_tokenizer_fallback(model, "LiteLLM", e)
+
+    encoding = _get_tiktoken_encoding(model, log_fallback=False)
+    return encoding.encode(text), "__tiktoken__"
+
+
+def _decode_tokens_with_model_tokenizer(token_ids: list[int], model: str, codec_id: str) -> str:
+    if codec_id != "__tiktoken__":
+        return litellm_decode(model=codec_id, tokens=token_ids)
+
+    encoding = _get_tiktoken_encoding(model, log_fallback=False)
+    return encoding.decode(token_ids)
 
 
 def _litellm_completion_kwargs(model: str, temperature: float, **extra_kwargs: Any) -> Dict[str, Any]:
@@ -135,7 +278,22 @@ def get_model_token_limit(model: str) -> int:
     Returns:
         int: The token limit for the model. Defaults to 8192 if unknown.
     """
-    return MODEL_TOKEN_LIMITS.get(model, 8192)
+    normalized_model = _normalize_model_for_tokenizer(model)
+    try:
+        max_tokens = litellm_get_max_tokens(normalized_model)
+        if isinstance(max_tokens, int) and max_tokens > 0:
+            return max_tokens
+    except Exception as e:
+        _log_tokenizer_fallback(model, "LiteLLM max-token lookup", e)
+
+    normalized_key = _normalized_model_token_limit_key(model)
+    if normalized_key in MODEL_TOKEN_LIMITS:
+        return MODEL_TOKEN_LIMITS[normalized_key]
+
+    if normalized_key.startswith("gpt-5"):
+        return MODEL_TOKEN_LIMITS["gpt-5"]
+
+    return 8192
 
 
 def count_tokens(text: str, model) -> int:
@@ -148,18 +306,22 @@ def count_tokens(text: str, model) -> int:
     Returns:
         int: The number of tokens in the text.
     """
+    litellm_error: Exception | None = None
     try:
-        # Try to get the encoding for the specific model
-        try:
-            encoding = tiktoken.encoding_for_model(model)
-        except KeyError:
-            # Fallback to cl100k_base encoding (used by GPT-4, GPT-3.5-turbo)
-            logger.warning(f"Model {model} not found in tiktoken, using cl100k_base encoding")
-            encoding = tiktoken.get_encoding("cl100k_base")
-        
-        return len(encoding.encode(text))
+        return _get_litellm_token_count(text=text, model=str(model))
     except Exception as e:
-        logger.error(f"Failed to count tokens: {e}. Estimating based on character count.")
+        litellm_error = e
+        _log_tokenizer_fallback(str(model), "LiteLLM token counting", litellm_error)
+
+    try:
+        encoding = _get_tiktoken_encoding(str(model), log_fallback=False)
+        return len(encoding.encode(text))
+    except Exception as tiktoken_error:
+        logger.warning(
+            f"Failed to count tokens for model {model} with LiteLLM and tiktoken; "
+            f"using character-count estimate. LiteLLM error: {litellm_error}; "
+            f"tiktoken error: {tiktoken_error}"
+        )
         # Rough estimation: ~4 characters per token
         return len(text) // 4
 
@@ -189,19 +351,31 @@ def truncate_message(message: str,
         return message, max_tokens - current_tokens
     
     logger.warning(f"Message has {current_tokens} tokens, exceeding limit of {max_tokens}. Truncating...")
-    
-    # Binary search to find the right truncation point
+
     try:
-        encoding = tiktoken.encoding_for_model(model)
-    except KeyError:
-        encoding = tiktoken.get_encoding("cl100k_base")
-    
-    tokens = encoding.encode(message)
-    truncated_tokens = tokens[:max_tokens]
-    truncated_message = encoding.decode(truncated_tokens)
-    
-    logger.info(f"Message truncated from {current_tokens} to {len(truncated_tokens)} tokens")
-    return truncated_message, max_tokens - len(truncated_tokens)
+        tokens, codec_id = _encode_text_with_model_tokenizer(message, model)
+        truncated_tokens = tokens[:max_tokens]
+        truncated_message = _decode_tokens_with_model_tokenizer(truncated_tokens, model, codec_id)
+    except Exception as e:
+        logger.debug(f"Tokenizer-based truncation failed for model {model}: {e}. Falling back to binary search.")
+        low = 0
+        high = len(message)
+        best = ""
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = message[:mid]
+            candidate_tokens = count_tokens(candidate, model)
+            if candidate_tokens <= max_tokens:
+                best = candidate
+                low = mid + 1
+            else:
+                high = mid - 1
+        truncated_message = best
+        truncated_tokens = None
+
+    final_token_count = count_tokens(truncated_message, model)
+    logger.info(f"Message truncated from {current_tokens} to {final_token_count} tokens")
+    return truncated_message, max_tokens - final_token_count
 
 
 def _is_llm_load_cacheable(struct: Optional[Any] = None) -> bool:

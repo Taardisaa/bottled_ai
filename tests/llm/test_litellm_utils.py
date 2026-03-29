@@ -18,6 +18,79 @@ class IntSchema(BaseModel):
 
 
 class TestLiteLlmUtils(unittest.TestCase):
+    def test_normalize_model_for_tokenizer_strips_provider_prefixes(self):
+        self.assertEqual("qwen-mlx", llm_utils._normalize_model_for_tokenizer("openai/qwen-mlx"))
+        self.assertEqual(
+            "gpt-5-mini",
+            llm_utils._normalize_model_for_tokenizer("openrouter/openai/gpt-5-mini"),
+        )
+        self.assertEqual(
+            "Qwen/Qwen3-14B",
+            llm_utils._normalize_model_for_tokenizer("hosted_vllm/Qwen/Qwen3-14B"),
+        )
+
+    def test_count_tokens_prefers_litellm_for_prefixed_model(self):
+        with patch("rs.utils.llm_utils.litellm_token_counter", return_value=11) as counter_mock, \
+                patch("rs.utils.llm_utils.tiktoken.encoding_for_model") as tiktoken_mock:
+            token_count = llm_utils.count_tokens("abc", "openai/qwen-mlx")
+
+        self.assertEqual(11, token_count)
+        counter_mock.assert_called_once_with(model="qwen-mlx", text="abc")
+        tiktoken_mock.assert_not_called()
+
+    def test_get_model_token_limit_uses_litellm_with_normalized_model_name(self):
+        with patch("rs.utils.llm_utils.litellm_get_max_tokens", return_value=98765) as max_tokens_mock:
+            token_limit = llm_utils.get_model_token_limit("openrouter/openai/gpt-5-mini")
+
+        self.assertEqual(98765, token_limit)
+        max_tokens_mock.assert_called_once_with("gpt-5-mini")
+
+    def test_get_model_token_limit_falls_back_to_local_override(self):
+        with patch("rs.utils.llm_utils.litellm_get_max_tokens", return_value=None):
+            self.assertEqual(272000, llm_utils.get_model_token_limit("openai/gpt-5"))
+
+    def test_count_tokens_falls_back_to_tiktoken_without_warning_for_prefixed_model(self):
+        class FakeEncoding:
+            def encode(self, text):
+                return list(text)
+
+        with patch("rs.utils.llm_utils.litellm_token_counter", side_effect=Exception("litellm tokenizer unavailable")), \
+                patch("rs.utils.llm_utils.tiktoken.encoding_for_model", side_effect=KeyError("unknown")), \
+                patch("rs.utils.llm_utils.tiktoken.get_encoding", return_value=FakeEncoding()), \
+                patch("rs.utils.llm_utils.logger.warning") as warning_mock, \
+                patch("rs.utils.llm_utils.logger.debug") as debug_mock:
+            token_count = llm_utils.count_tokens("abc", "openai/qwen-mlx")
+
+        self.assertEqual(3, token_count)
+        warning_mock.assert_not_called()
+        self.assertGreaterEqual(debug_mock.call_count, 1)
+
+    def test_count_tokens_falls_back_to_character_estimate_after_litellm_and_tiktoken_fail(self):
+        with patch("rs.utils.llm_utils.litellm_token_counter", side_effect=Exception("litellm tokenizer unavailable")), \
+                patch("rs.utils.llm_utils.tiktoken.encoding_for_model", side_effect=KeyError("unknown")), \
+                patch("rs.utils.llm_utils.tiktoken.get_encoding", side_effect=KeyError("missing encoding")), \
+                patch("rs.utils.llm_utils.logger.warning") as warning_mock:
+            token_count = llm_utils.count_tokens("abcdefgh", "openai/qwen-mlx")
+
+        self.assertEqual(2, token_count)
+        warning_mock.assert_called_once()
+
+    def test_truncate_message_uses_litellm_codec_and_limit_lookup(self):
+        with patch("rs.utils.llm_utils.litellm_get_max_tokens", return_value=6), \
+                patch("rs.utils.llm_utils.litellm_token_counter", side_effect=[10, 4]), \
+                patch("rs.utils.llm_utils.litellm_encode", return_value=list(range(10))) as encode_mock, \
+                patch("rs.utils.llm_utils.litellm_decode", return_value="trim") as decode_mock:
+            truncated, remaining = llm_utils.truncate_message(
+                "abcdefghij",
+                model="openai/qwen-mlx",
+                reserve_tokens=2,
+            )
+
+        self.assertEqual("trim", truncated)
+        self.assertEqual(0, remaining)
+        encode_mock.assert_called_once_with(model="qwen-mlx", text="abcdefghij")
+        decode_mock.assert_called_once_with(model="qwen-mlx", tokens=[0, 1, 2, 3])
+
     def test_custom_base_url_prefixes_openai_provider(self):
         original_base = llm_utils.config.llm_base_url
         try:
@@ -34,10 +107,14 @@ class TestLiteLlmUtils(unittest.TestCase):
     def test_ensure_api_key_overwrites_stale_openai_env(self):
         original_env = os.environ.get("OPENAI_API_KEY")
         original_config_key = llm_utils.config.openai_key
+        original_local_base = llm_utils.config.llm_base_url
+        original_local_key = llm_utils.config.llm_api_key
 
         try:
             os.environ["OPENAI_API_KEY"] = "stale-key"
             llm_utils.config.openai_key = "fresh-key"
+            llm_utils.config.llm_base_url = ""
+            llm_utils.config.llm_api_key = ""
 
             ok = llm_utils._ensure_api_key_for_model("gpt-5-mini")
 
@@ -45,6 +122,8 @@ class TestLiteLlmUtils(unittest.TestCase):
             self.assertEqual("fresh-key", os.environ.get("OPENAI_API_KEY"))
         finally:
             llm_utils.config.openai_key = original_config_key
+            llm_utils.config.llm_base_url = original_local_base
+            llm_utils.config.llm_api_key = original_local_key
             if original_env is None:
                 os.environ.pop("OPENAI_API_KEY", None)
             else:
@@ -53,9 +132,13 @@ class TestLiteLlmUtils(unittest.TestCase):
     def test_ask_llm_once_openrouter_uses_litellm_kwargs(self):
         original_key = llm_utils.config.openrouter_key
         original_url = llm_utils.config.openrouter_base_url
+        original_local_base = llm_utils.config.llm_base_url
+        original_local_key = llm_utils.config.llm_api_key
         original_openai_env = os.environ.get("OPENAI_API_KEY")
         llm_utils.config.openrouter_key = "test-openrouter"
         llm_utils.config.openrouter_base_url = "https://openrouter.ai/api/v1"
+        llm_utils.config.llm_base_url = ""
+        llm_utils.config.llm_api_key = ""
 
         captured = {}
 
@@ -78,6 +161,8 @@ class TestLiteLlmUtils(unittest.TestCase):
         finally:
             llm_utils.config.openrouter_key = original_key
             llm_utils.config.openrouter_base_url = original_url
+            llm_utils.config.llm_base_url = original_local_base
+            llm_utils.config.llm_api_key = original_local_key
             if original_openai_env is None:
                 os.environ.pop("OPENAI_API_KEY", None)
             else:
@@ -212,6 +297,9 @@ class TestLiteLlmUtils(unittest.TestCase):
             temperature=1.0,
             enable_cache=False,
         )
+
+        if response is None:
+            self.skipTest("Live LiteLLM backend is not reachable in this environment.")
 
         self.assertIsInstance(response, DecisionSchema)
         assert isinstance(response, DecisionSchema)

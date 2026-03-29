@@ -5,9 +5,6 @@ from dataclasses import asdict, dataclass, field
 import time
 from typing import Any, Sequence
 
-from rs.ai import PEACEFUL_PUMMELING, PWNDER_MY_ORBS, REQUESTED_STRIKE, SHIVS_AND_GIGGLES
-from rs.ai.smart_agent.handlers.shop_purchase_handler import ShopPurchaseHandler as SmartShopPurchaseHandler
-from rs.common.handlers.common_map_handler import CommonMapHandler
 from rs.llm.agents.base_agent import AgentDecision
 from rs.llm.agents.battle_meta_advisor_agent import BattleMetaDecision
 from rs.llm.benchmark_suite import LlmBenchmarkCase, get_fixed_llm_benchmark_suite, load_benchmark_case_state
@@ -20,14 +17,6 @@ from rs.llm.runtime import get_battle_meta_advisor, get_event_orchestrator
 from rs.machine.ai_strategy import AiStrategy
 from rs.machine.handlers.handler import Handler
 from rs.machine.state import GameState
-
-
-_STRATEGIES_BY_KEY: dict[str, AiStrategy] = {
-    "peaceful_pummeling": PEACEFUL_PUMMELING,
-    "pwnder_my_orbs": PWNDER_MY_ORBS,
-    "requested_strike": REQUESTED_STRIKE,
-    "shivs_and_giggles": SHIVS_AND_GIGGLES,
-}
 
 _HANDLER_KEYS_BY_AREA = {
     "event": "EventHandler",
@@ -287,11 +276,11 @@ def _build_handler_context(case: LlmBenchmarkCase, handler: Handler, state: Game
 
 def _build_handler_for_case(case: LlmBenchmarkCase, state: GameState) -> Handler:
     if case.handler_area == "shop":
-        return SmartShopPurchaseHandler()
+        return _build_smart_shop_purchase_handler()
     if case.handler_area == "path":
-        return CommonMapHandler()
+        return _build_common_map_handler()
 
-    strategy = _STRATEGIES_BY_KEY.get(case.recommended_strategy)
+    strategy = _get_strategies_by_key().get(case.recommended_strategy)
     if strategy is None:
         raise ValueError(f"Unsupported recommended strategy: {case.recommended_strategy}")
 
@@ -341,3 +330,31 @@ def _coerce_int(value: Any) -> int | None:
         return None if value is None else int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _get_strategies_by_key() -> dict[str, AiStrategy]:
+    # Import strategy modules lazily to avoid pulling rs.llm back in while
+    # rs.llm.__init__ is still evaluating this module.
+    from rs.ai.peaceful_pummeling.peaceful_pummeling import PEACEFUL_PUMMELING
+    from rs.ai.pwnder_my_orbs.pwnder_my_orbs import PWNDER_MY_ORBS
+    from rs.ai.requested_strike.requested_strike import REQUESTED_STRIKE
+    from rs.ai.shivs_and_giggles.shivs_and_giggles import SHIVS_AND_GIGGLES
+
+    return {
+        "peaceful_pummeling": PEACEFUL_PUMMELING,
+        "pwnder_my_orbs": PWNDER_MY_ORBS,
+        "requested_strike": REQUESTED_STRIKE,
+        "shivs_and_giggles": SHIVS_AND_GIGGLES,
+    }
+
+
+def _build_smart_shop_purchase_handler() -> Handler:
+    from rs.ai.smart_agent.handlers.shop_purchase_handler import ShopPurchaseHandler as SmartShopPurchaseHandler
+
+    return SmartShopPurchaseHandler()
+
+
+def _build_common_map_handler() -> Handler:
+    from rs.common.handlers.common_map_handler import CommonMapHandler
+
+    return CommonMapHandler()
