@@ -4,6 +4,8 @@ from unittest.mock import patch
 
 from rs.llm.agents.base_agent import AgentContext
 from rs.llm.providers.event_llm_provider import EventDecisionSchema, EventLlmProvider
+from test_helpers.resources import load_resource_state
+from rs.llm.integration.event_context import build_event_agent_context
 
 
 class TestEventLlmProvider(unittest.TestCase):
@@ -69,6 +71,52 @@ class TestEventLlmProvider(unittest.TestCase):
         self.assertEqual(0.72, proposal.confidence)
         self.assertEqual("pick reward", proposal.explanation)
         self.assertEqual(123, proposal.metadata["token_total"])
+
+    def test_build_prompt_renders_event_options_and_prompt_safe_status(self):
+        state = load_resource_state("event/event_neow.json")
+        context = build_event_agent_context(state, "EventHandler")
+        context.extras.update(
+            {
+                "recent_llm_decisions": "choose 0 at prior event",
+                "retrieved_episodic_memories": "none",
+                "retrieved_semantic_memories": "none",
+                "langmem_status": (
+                    "embeddings_unavailable:Could not import transformers python package. "
+                    "Please install it."
+                ),
+                "current_priorities": ["avoid_bad_event_traps"],
+                "risk_flags": [],
+                "deck_direction": "unknown",
+                "run_hypotheses": ["maintain EventHandler consistency"],
+            }
+        )
+
+        prompt = EventLlmProvider(model="gpt-5-mini")._build_prompt(context)
+
+        self.assertIn('choose <index>', prompt)
+        self.assertIn('answer in short plain text using these fields', prompt)
+        self.assertIn('Available protocol commands:', prompt)
+        self.assertIn('- 0 | enabled | label="Obtain a random rare Card"', prompt)
+        self.assertIn('text="[ Obtain a random rare Card ]"', prompt)
+        self.assertIn('LangMem status: unavailable', prompt)
+        self.assertNotIn('transformers python package', prompt)
+        self.assertNotIn('Extras:', prompt)
+        self.assertNotIn('Return ONLY a JSON object', prompt)
+
+    def test_build_prompt_falls_back_to_choice_list_when_event_options_missing(self):
+        context = AgentContext(
+            handler_name="EventHandler",
+            screen_type="EVENT",
+            available_commands=["choose", "wait", "state"],
+            choice_list=["heal", "leave"],
+            game_state={"event_name": "Fallback Event", "event_options": []},
+            extras={},
+        )
+
+        prompt = EventLlmProvider(model="gpt-5-mini")._build_prompt(context)
+
+        self.assertIn('- 0 | enabled | choice="heal"', prompt)
+        self.assertIn('- 1 | enabled | choice="leave"', prompt)
 
 
 if __name__ == "__main__":

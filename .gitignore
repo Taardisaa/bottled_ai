@@ -62,3 +62,4 @@ venv/
 dataset/
 third_party/
 .env.bak
+logs/

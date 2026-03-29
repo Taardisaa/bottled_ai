@@ -1,4 +1,5 @@
 import argparse
+import threading
 import time
 import traceback
 
@@ -26,6 +27,30 @@ STRATEGIES = {
     "shivs_and_giggles": SHIVS_AND_GIGGLES,
     "smart_agent": SMART_AGENT,
 }
+
+
+def _run_preflight_in_background() -> None:
+    llm_preflight = run_llm_preflight_check()
+    if llm_preflight.available:
+        log(
+            "LLM preflight succeeded: "
+            f"requested_model={llm_preflight.requested_model}, "
+            f"response_model={llm_preflight.response_model}, "
+            f"provider={llm_preflight.provider}, "
+            f"endpoint={llm_preflight.endpoint}, "
+            f"max_tokens={llm_preflight.max_tokens}, "
+            f"total_tokens={llm_preflight.total_tokens}, "
+            f"preview={llm_preflight.response_preview}"
+        )
+    else:
+        log(
+            "LLM preflight failed: "
+            f"requested_model={llm_preflight.requested_model}, "
+            f"provider={llm_preflight.provider}, "
+            f"endpoint={llm_preflight.endpoint}, "
+            f"max_tokens={llm_preflight.max_tokens}, "
+            f"error={llm_preflight.error}"
+        )
 
 
 def _parse_args() -> argparse.Namespace:
@@ -59,31 +84,18 @@ if __name__ == "__main__":
     init_log()
     log("Starting up")
     log(f"Selected strategy: {selected_strategy.name}")
-    log(f"LangMem status: {get_langmem_service().status()}")
     log_new_run_sequence()
     try:
         client = Client()
-        llm_preflight = run_llm_preflight_check()
-        if llm_preflight.available:
-            log(
-                "LLM preflight succeeded: "
-                f"requested_model={llm_preflight.requested_model}, "
-                f"response_model={llm_preflight.response_model}, "
-                f"provider={llm_preflight.provider}, "
-                f"endpoint={llm_preflight.endpoint}, "
-                f"max_tokens={llm_preflight.max_tokens}, "
-                f"total_tokens={llm_preflight.total_tokens}, "
-                f"preview={llm_preflight.response_preview}"
-            )
-        else:
-            log(
-                "LLM preflight failed: "
-                f"requested_model={llm_preflight.requested_model}, "
-                f"provider={llm_preflight.provider}, "
-                f"endpoint={llm_preflight.endpoint}, "
-                f"max_tokens={llm_preflight.max_tokens}, "
-                f"error={llm_preflight.error}"
-            )
+        log("before langmem init")
+        langmem_service = get_langmem_service()
+        log("after langmem init")
+        log(f"LangMem status: {langmem_service.status()}")
+        threading.Thread(
+            target=_run_preflight_in_background,
+            name="llm-preflight",
+            daemon=True,
+        ).start()
         game = Game(client, selected_strategy)
         if selected_seeds:
             for seed in selected_seeds:

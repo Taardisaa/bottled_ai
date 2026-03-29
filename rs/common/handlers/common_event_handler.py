@@ -1,3 +1,5 @@
+import os
+
 from presentation_config import presentation_mode, p_delay, p_delay_s, slow_events
 from rs.game.event import Event
 from rs.game.screen_type import ScreenType
@@ -21,7 +23,7 @@ class CommonEventHandler(Handler):
     ):
         self.removal_priority_list = removal_priority_list.copy()
         self.cards_desired_for_deck = cards_desired_for_deck.copy()
-        self.advisor_orchestrator = get_event_orchestrator() if advisor_orchestrator is None else advisor_orchestrator
+        self.advisor_orchestrator = advisor_orchestrator
 
     def can_handle(self, state: GameState) -> bool:
         return state.screen_type() == ScreenType.EVENT.value and state.has_command(Command.CHOOSE)
@@ -50,9 +52,14 @@ class CommonEventHandler(Handler):
         if is_ai_player_graph_enabled():
             return None
 
-        context = build_event_agent_context(state, type(self).__name__)
+        if self.advisor_orchestrator is None and os.environ.get("LLM_ENABLED", "").strip().lower() in {
+            "0", "false", "no", "off"
+        }:
+            return None
 
-        decision = self.advisor_orchestrator.decide("EventHandler", context)
+        context = build_event_agent_context(state, type(self).__name__)
+        orchestrator = self.advisor_orchestrator if self.advisor_orchestrator is not None else get_event_orchestrator()
+        decision = orchestrator.decide("EventHandler", context)
         if decision is None or decision.fallback_recommended or decision.proposed_command is None:
             return None
         return decision.proposed_command

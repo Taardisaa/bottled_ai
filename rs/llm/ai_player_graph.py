@@ -88,11 +88,21 @@ class AIPlayerGraph:
         return self._config.enabled and self._config.ai_player_graph_enabled
 
     def can_handle(self, state: GameState) -> bool:
+        if state.has_command(Command.CHOOSE) and len(state.get_choice_list()) <= 1:
+            return False
         return self._build_context(state) is not None
 
     def decide(self, state: GameState) -> list[str] | None:
         if not self.is_enabled():
             self._trace_raw_event(event_type="graph_disabled", summary="ai player graph disabled by config")
+            return None
+
+        if state.has_command(Command.CHOOSE) and len(state.get_choice_list()) <= 1:
+            self._trace_raw_event(
+                event_type="graph_unhandled_state",
+                screen_type=state.screen_type(),
+                summary="single-choice choose state bypasses ai player graph",
+            )
             return None
 
         context = self._build_context(state)

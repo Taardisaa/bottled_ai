@@ -76,7 +76,7 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
             self.assertTrue(config.ai_player_graph_enabled)
             self.assertFalse(config.langmem_enabled)
             self.assertEqual("dataset/langmem/memory.sqlite3", config.langmem_sqlite_path)
-            self.assertEqual("bge-small-en-v1.5", config.langmem_embeddings_model)
+            self.assertEqual("BAAI/bge-small-en-v1.5", config.langmem_embeddings_model)
 
     def test_load_llm_config_allows_env_overrides(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -118,6 +118,23 @@ class TestAIPlayerGraph(unittest.TestCase):
         self.assertFalse(graph.can_handle(state))
         self.assertIsNone(graph.decide(state))
 
+    def test_single_choice_choose_state_is_not_handled_by_unified_graph(self):
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+        )
+
+        state = load_resource_state("/event/divine_fountain.json")
+        state.json["game_state"]["choice_list"] = ["leave"]
+
+        self.assertFalse(graph.can_handle(state))
+        self.assertIsNone(graph.decide(state))
+
     def test_graph_trace_logs_successful_decision_path(self):
         with tempfile.TemporaryDirectory() as tmp:
             trace_path = str(Path(tmp) / "graph_trace.jsonl")

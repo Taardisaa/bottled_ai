@@ -27,7 +27,7 @@ class LlmConfig:
     langmem_sqlite_path: str = "dataset/langmem/memory.sqlite3"
     langmem_embeddings_base_url: str = ""
     langmem_embeddings_api_key: str = ""
-    langmem_embeddings_model: str = "bge-small-en-v1.5"
+    langmem_embeddings_model: str = "BAAI/bge-small-en-v1.5"
     langmem_top_k: int = 3
     langmem_reflection_batch_size: int = 5
     langmem_max_semantic_memories_per_namespace: int = 50
@@ -99,7 +99,7 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
     langmem_sqlite_path_default = str(langmem_values.get("sqlite_path", "dataset/langmem/memory.sqlite3"))
     langmem_embeddings_base_url_default = str(langmem_values.get("embeddings_base_url", ""))
     langmem_embeddings_api_key_default = str(langmem_values.get("embeddings_api_key", ""))
-    langmem_embeddings_model_default = str(langmem_values.get("embeddings_model", "bge-small-en-v1.5"))
+    langmem_embeddings_model_default = str(langmem_values.get("embeddings_model", "BAAI/bge-small-en-v1.5"))
     langmem_top_k_default = int(langmem_values.get("top_k", 3))
     langmem_reflection_batch_size_default = int(langmem_values.get("reflection_batch_size", 5))
     langmem_max_semantic_memories_per_namespace_default = int(

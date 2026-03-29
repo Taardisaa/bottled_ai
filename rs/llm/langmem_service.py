@@ -11,8 +11,10 @@ import sqlite3
 from threading import RLock
 from typing import Any, Callable
 import uuid
+from urllib import error, request
 
 from langchain_core.messages import HumanMessage
+from langchain_core.embeddings import Embeddings
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langgraph.store.base import SearchItem
 from langgraph.store.memory import InMemoryStore
@@ -24,6 +26,25 @@ from rs.utils.config import config as llm_runtime_config
 
 
 MemoryManagerFactory = Callable[[tuple[str, ...], InMemoryStore], Any]
+
+
+class LocalSentenceTransformerEmbeddings(Embeddings):
+    def __init__(self, model_name: str):
+        from sentence_transformers import SentenceTransformer
+
+        self._model_name = model_name
+        self._model = SentenceTransformer(model_name)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        vectors = self._model.encode(
+            [str(text) for text in texts],
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )
+        return [[float(value) for value in vector] for vector in vectors]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed_documents([text])[0]
 
 
 @dataclass(frozen=True)
@@ -216,20 +237,55 @@ class LangMemService:
             self._status_detail = str(e)
             self._store = None
 
-    def _build_embeddings_client(self) -> OpenAIEmbeddings:
+    def _build_embeddings_client(self) -> Embeddings:
         if self._embeddings_client is not None:
             return self._embeddings_client
 
-        base_url = self._config.langmem_embeddings_base_url or llm_runtime_config.llm_base_url
+        base_url = str(self._config.langmem_embeddings_base_url or "").strip()
         api_key = self._config.langmem_embeddings_api_key or llm_runtime_config.llm_api_key or "local-embeddings"
-        if not base_url:
-            raise ValueError("LANGMEM_EMBEDDINGS_BASE_URL is not configured")
-        return OpenAIEmbeddings(
-            model=self._config.langmem_embeddings_model,
-            base_url=base_url,
-            api_key=api_key,
-            tiktoken_enabled=False,
-        )
+        if base_url:
+            self._verify_embeddings_model_available(base_url, api_key, self._config.langmem_embeddings_model)
+            return OpenAIEmbeddings(
+                model=self._config.langmem_embeddings_model,
+                base_url=base_url,
+                api_key=api_key,
+                tiktoken_enabled=False,
+            )
+        return self._build_local_embeddings_client(self._config.langmem_embeddings_model)
+
+    def _build_local_embeddings_client(self, model_name: str) -> Embeddings:
+        return LocalSentenceTransformerEmbeddings(model_name)
+
+    def _verify_embeddings_model_available(self, base_url: str, api_key: str, model_name: str) -> None:
+        models_url = base_url.rstrip("/") + "/models"
+        headers: dict[str, str] = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        http_request = request.Request(models_url, headers=headers, method="GET")
+        try:
+            with request.urlopen(http_request, timeout=10) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except error.HTTPError as exc:
+            error_body = exc.read().decode("utf-8", errors="replace")
+            raise ValueError(f"embeddings_models_check_failed:{exc.code}:{error_body}") from exc
+        except Exception as exc:
+            raise ValueError(f"embeddings_models_check_failed:{exc}") from exc
+
+        data = payload.get("data")
+        if not isinstance(data, list):
+            raise ValueError("embeddings_models_check_failed:missing_models_data")
+
+        available_models = {
+            str(item.get("id", "")).strip()
+            for item in data
+            if isinstance(item, dict) and str(item.get("id", "")).strip()
+        }
+        if model_name not in available_models:
+            available_preview = ", ".join(sorted(available_models)[:10]) or "none"
+            raise ValueError(
+                f"embeddings_model_not_available:{model_name}; available_models={available_preview}"
+            )
 
     def _hydrate_from_repository(self) -> None:
         if self._store is None or self._repository is None:

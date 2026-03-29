@@ -23,6 +23,15 @@ class StaticDecisionAgent(BaseAgent):
 
 
 class TestEventHandlerLlmAdvisor(unittest.TestCase):
+    def test_handler_init_does_not_eagerly_create_orchestrator(self):
+        with patch("rs.common.handlers.common_event_handler.get_event_orchestrator") as get_orchestrator:
+            CommonEventHandler(
+                removal_priority_list=[],
+                cards_desired_for_deck={},
+            )
+
+        get_orchestrator.assert_not_called()
+
     def test_advisor_command_overrides_deterministic_choice(self):
         orchestrator = AIPlayerAgent(config=LlmConfig(enabled=True, telemetry_enabled=False))
         orchestrator.register_agent("EventHandler", StaticDecisionAgent("choose 1"))

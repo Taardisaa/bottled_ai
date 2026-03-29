@@ -112,13 +112,21 @@ class EventLlmProvider:
         recent_llm_decisions = context.extras.get("recent_llm_decisions", "none")
         retrieved_episodic_memories = context.extras.get("retrieved_episodic_memories", "none")
         retrieved_semantic_memories = context.extras.get("retrieved_semantic_memories", "none")
-        langmem_status = context.extras.get("langmem_status", "disabled_by_config")
+        langmem_status = self._normalize_langmem_status(context.extras.get("langmem_status", "disabled_by_config"))
+        current_priorities = self._format_list_field(context.extras.get("current_priorities"), default="none")
+        risk_flags = self._format_list_field(context.extras.get("risk_flags"), default="stable")
+        deck_direction = str(context.extras.get("deck_direction", "unknown") or "unknown")
+        run_hypotheses = self._format_list_field(context.extras.get("run_hypotheses"), default="none")
+        event_options_text = self._format_event_options(
+            context.game_state.get("event_options"),
+            context.choice_list,
+        )
 
         return PROMPT_TEMPLATE.format(
             handler_name=context.handler_name,
             screen_type=context.screen_type,
             available_commands=context.available_commands,
-            choice_list=context.choice_list,
+            event_options_text=event_options_text,
             event_name=event_name,
             floor=floor,
             act=act,
@@ -130,5 +138,44 @@ class EventLlmProvider:
             retrieved_episodic_memories=retrieved_episodic_memories,
             retrieved_semantic_memories=retrieved_semantic_memories,
             langmem_status=langmem_status,
-            extras=context.extras,
+            current_priorities=current_priorities,
+            risk_flags=risk_flags,
+            deck_direction=deck_direction,
+            run_hypotheses=run_hypotheses,
         )
+
+    def _format_event_options(self, event_options: Any, choice_list: list[str]) -> str:
+        if isinstance(event_options, list) and event_options:
+            rendered_options: list[str] = []
+            for fallback_index, option in enumerate(event_options):
+                if not isinstance(option, dict):
+                    continue
+                choice_index = option.get("choice_index", fallback_index)
+                label = str(option.get("label", "")).strip()
+                text = str(option.get("text", "")).strip()
+                disabled = bool(option.get("disabled", False))
+                status = "disabled" if disabled else "enabled"
+                rendered_options.append(
+                    f"- {choice_index} | {status} | label=\"{label}\" | text=\"{text}\""
+                )
+            if rendered_options:
+                return "\n".join(rendered_options)
+
+        if choice_list:
+            return "\n".join(f"- {index} | enabled | choice=\"{choice}\"" for index, choice in enumerate(choice_list))
+        return "- none"
+
+    def _normalize_langmem_status(self, status: Any) -> str:
+        status_text = str(status or "").strip().lower()
+        if status_text == "" or status_text == "disabled_by_config":
+            return "disabled"
+        if "unavailable" in status_text or "error" in status_text or "failed" in status_text:
+            return "unavailable"
+        return "ready"
+
+    def _format_list_field(self, value: Any, default: str) -> str:
+        if isinstance(value, list):
+            normalized_values = [str(item).strip() for item in value if str(item).strip()]
+            return ", ".join(normalized_values) if normalized_values else default
+        value_text = str(value or "").strip()
+        return value_text if value_text else default

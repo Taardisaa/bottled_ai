@@ -38,6 +38,11 @@ class FakeReflectionManager:
         }]
 
 
+class LocalEmbeddingsLangMemService(LangMemService):
+    def _build_local_embeddings_client(self, model_name):
+        return FakeEmbeddings()
+
+
 class TestLangMemService(unittest.TestCase):
     def test_repository_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -109,6 +114,22 @@ class TestLangMemService(unittest.TestCase):
             self.assertEqual("ready", payload["langmem_status"])
             self.assertIn("choose 0", payload["retrieved_episodic_memories"])
             self.assertEqual("none", payload["retrieved_semantic_memories"])
+            service.shutdown(wait=True)
+
+    def test_service_uses_local_embeddings_when_no_remote_endpoint_is_configured(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = LocalEmbeddingsLangMemService(
+                config=LlmConfig(
+                    enabled=True,
+                    langmem_enabled=True,
+                    langmem_sqlite_path=str(Path(tmp) / "memory.sqlite3"),
+                    langmem_embeddings_base_url="",
+                    langmem_embeddings_model="BAAI/bge-small-en-v1.5",
+                ),
+                reflection_manager_factory=lambda namespace, store: FakeReflectionManager(namespace, store),
+            )
+
+            self.assertEqual("ready", service.status())
             service.shutdown(wait=True)
 
     def test_finalize_run_creates_semantic_memory(self):
