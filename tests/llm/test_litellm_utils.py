@@ -18,6 +18,55 @@ class IntSchema(BaseModel):
 
 
 class TestLiteLlmUtils(unittest.TestCase):
+    def test_run_llm_preflight_check_reports_basic_info_on_success(self):
+        original_llm_base_url = llm_utils.config.llm_base_url
+        original_openai_base_url = llm_utils.config.openai_base_url
+        try:
+            llm_utils.config.llm_base_url = ""
+            llm_utils.config.openai_base_url = ""
+            with patch("rs.utils.llm_utils._ensure_api_key_for_model", return_value=True), \
+                    patch("rs.utils.llm_utils.litellm_get_max_tokens", return_value=12345), \
+                    patch("rs.utils.llm_utils.completion", return_value={
+                        "model": "qwen-mlx-live",
+                        "choices": [{"message": {"content": "OK"}}],
+                        "usage": {"total_tokens": 9},
+                    }) as completion_mock:
+                result = llm_utils.run_llm_preflight_check(model="openai/qwen-mlx")
+        finally:
+            llm_utils.config.llm_base_url = original_llm_base_url
+            llm_utils.config.openai_base_url = original_openai_base_url
+
+        self.assertTrue(result.available)
+        self.assertEqual("openai/qwen-mlx", result.requested_model)
+        self.assertEqual("openai/qwen-mlx", result.routed_model)
+        self.assertEqual("qwen-mlx", result.normalized_model)
+        self.assertEqual("openai-compatible", result.provider)
+        self.assertEqual("provider-default", result.endpoint)
+        self.assertEqual(12345, result.max_tokens)
+        self.assertEqual("qwen-mlx-live", result.response_model)
+        self.assertEqual("OK", result.response_preview)
+        self.assertEqual(9, result.total_tokens)
+        completion_mock.assert_called_once()
+
+    def test_run_llm_preflight_check_returns_failure_when_api_config_missing(self):
+        original_llm_base_url = llm_utils.config.llm_base_url
+        original_openai_base_url = llm_utils.config.openai_base_url
+        try:
+            llm_utils.config.llm_base_url = ""
+            llm_utils.config.openai_base_url = ""
+            with patch("rs.utils.llm_utils._ensure_api_key_for_model", return_value=False), \
+                    patch("rs.utils.llm_utils.completion") as completion_mock:
+                result = llm_utils.run_llm_preflight_check(model="gpt-5-mini")
+        finally:
+            llm_utils.config.llm_base_url = original_llm_base_url
+            llm_utils.config.openai_base_url = original_openai_base_url
+
+        self.assertFalse(result.available)
+        self.assertEqual("gpt-5-mini", result.requested_model)
+        self.assertEqual("openai-compatible", result.provider)
+        self.assertIn("Missing or invalid API configuration", result.error)
+        completion_mock.assert_not_called()
+
     def test_normalize_model_for_tokenizer_strips_provider_prefixes(self):
         self.assertEqual("qwen-mlx", llm_utils._normalize_model_for_tokenizer("openai/qwen-mlx"))
         self.assertEqual(

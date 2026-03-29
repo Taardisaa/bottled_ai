@@ -1,7 +1,10 @@
+from dataclasses import dataclass
+import json
+import os
 from pathlib import Path
 from typing import Optional, Any, Union, Tuple, List
-import os
-import json
+
+from collections.abc import Sequence
 from litellm import (
     completion,
     batch_completion,
@@ -11,7 +14,6 @@ from litellm import (
     token_counter as litellm_token_counter,
 )
 from langchain.tools import BaseTool
-from collections.abc import Sequence
 from pydantic import BaseModel
 from typing import Dict, Type
 import tiktoken
@@ -50,6 +52,21 @@ _TOKENIZER_PROVIDER_PREFIXES = {
 }
 
 
+@dataclass(frozen=True)
+class LLMPreflightResult:
+    available: bool
+    requested_model: str
+    routed_model: str
+    normalized_model: str
+    provider: str
+    endpoint: str
+    max_tokens: int
+    response_model: str = ""
+    response_preview: str = ""
+    total_tokens: int = 0
+    error: str = ""
+
+
 def _is_openrouter_model(model: str) -> bool:
     return model.startswith("openrouter/")
 
@@ -66,6 +83,41 @@ def _normalize_model_for_litellm(model: str) -> str:
         return model
 
     return f"hosted_vllm/{model}"
+
+
+def _provider_name_for_model(model: str) -> str:
+    if _has_custom_base_url():
+        return "custom-openai-compatible"
+    if _is_openrouter_model(model):
+        return "openrouter"
+    if model.startswith("claude"):
+        return "anthropic"
+    return "openai-compatible"
+
+
+def _endpoint_for_model(model: str) -> str:
+    if _has_custom_base_url():
+        return config.llm_base_url
+    if _is_openrouter_model(model):
+        return config.openrouter_base_url
+    if config.openai_base_url and not model.startswith("claude"):
+        return config.openai_base_url
+    return "provider-default"
+
+
+def _safe_preview(value: Any, limit: int = 120) -> str:
+    if value is None:
+        return ""
+
+    if isinstance(value, (dict, list)):
+        preview = json.dumps(value, ensure_ascii=False)
+    else:
+        preview = str(value)
+
+    preview = " ".join(preview.split())
+    if len(preview) > limit:
+        return preview[: limit - 3] + "..."
+    return preview
 
 
 def _normalize_model_for_tokenizer(model: str) -> str:
@@ -455,6 +507,74 @@ def _extract_litellm_content(response: Any) -> Any:
     if "parsed" in message:
         return message.get("parsed")
     return message.get("content")
+
+
+def run_llm_preflight_check(
+        model: Optional[str] = None,
+        probe_message: str = "Reply with exactly: OK") -> LLMPreflightResult:
+    requested_model = model or config.fast_llm_model
+    routed_model = _normalize_model_for_litellm(requested_model)
+    normalized_model = _normalize_model_for_tokenizer(requested_model)
+    provider = _provider_name_for_model(requested_model)
+    endpoint = _endpoint_for_model(requested_model)
+    max_tokens = get_model_token_limit(requested_model)
+
+    if not _ensure_api_key_for_model(requested_model):
+        return LLMPreflightResult(
+            available=False,
+            requested_model=requested_model,
+            routed_model=routed_model,
+            normalized_model=normalized_model,
+            provider=provider,
+            endpoint=endpoint,
+            max_tokens=max_tokens,
+            error="Missing or invalid API configuration for selected model.",
+        )
+
+    try:
+        completion_kwargs = _litellm_completion_kwargs(
+            requested_model,
+            _normalize_temperature_for_model(requested_model, 0.0),
+            max_tokens=16,
+        )
+        raw_response = completion(
+            messages=[{"role": "user", "content": probe_message}],
+            **completion_kwargs,
+        )
+        if hasattr(raw_response, "model_dump"):
+            response_dict = raw_response.model_dump()
+        elif isinstance(raw_response, dict):
+            response_dict = raw_response
+        else:
+            raise TypeError(f"Unexpected LiteLLM response type: {type(raw_response)!r}")
+
+        usage = response_dict.get("usage", {})
+        content = _extract_litellm_content(response_dict)
+        response_model = str(response_dict.get("model", "") or routed_model)
+
+        return LLMPreflightResult(
+            available=True,
+            requested_model=requested_model,
+            routed_model=routed_model,
+            normalized_model=normalized_model,
+            provider=provider,
+            endpoint=endpoint,
+            max_tokens=max_tokens,
+            response_model=response_model,
+            response_preview=_safe_preview(content),
+            total_tokens=int(usage.get("total_tokens", 0) or 0),
+        )
+    except Exception as e:
+        return LLMPreflightResult(
+            available=False,
+            requested_model=requested_model,
+            routed_model=routed_model,
+            normalized_model=normalized_model,
+            provider=provider,
+            endpoint=endpoint,
+            max_tokens=max_tokens,
+            error=str(e),
+        )
 
 
 def _coerce_structured_response(content: Any, struct: LLMAcceptStructParam) -> Optional[LLMLoadedResponse]:

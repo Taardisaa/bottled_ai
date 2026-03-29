@@ -5,8 +5,9 @@ import traceback
 from rs.ai import *
 from rs.helper.seed import make_random_seed
 from rs.api.client import Client
-from rs.machine.game import Game
 from rs.helper.logger import log, init_log, log_new_run_sequence
+from rs.machine.game import Game
+from rs.utils.llm_utils import run_llm_preflight_check
 
 # If there are run seeds, it will run them. Otherwise, it will use the run amount.
 run_seeds = [
@@ -57,6 +58,27 @@ if __name__ == "__main__":
     init_log()
     log("Starting up")
     log(f"Selected strategy: {selected_strategy.name}")
+    llm_preflight = run_llm_preflight_check()
+    if llm_preflight.available:
+        log(
+            "LLM preflight succeeded: "
+            f"requested_model={llm_preflight.requested_model}, "
+            f"response_model={llm_preflight.response_model}, "
+            f"provider={llm_preflight.provider}, "
+            f"endpoint={llm_preflight.endpoint}, "
+            f"max_tokens={llm_preflight.max_tokens}, "
+            f"total_tokens={llm_preflight.total_tokens}, "
+            f"preview={llm_preflight.response_preview}"
+        )
+    else:
+        log(
+            "LLM preflight failed: "
+            f"requested_model={llm_preflight.requested_model}, "
+            f"provider={llm_preflight.provider}, "
+            f"endpoint={llm_preflight.endpoint}, "
+            f"max_tokens={llm_preflight.max_tokens}, "
+            f"error={llm_preflight.error}"
+        )
     log_new_run_sequence()
     try:
         client = Client()

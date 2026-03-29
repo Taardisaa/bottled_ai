@@ -1,4 +1,4 @@
-fast_llm_model: openai/qwen-mlx
+fast_llm_model: qwen-mlx
 # Use OpenRouter by setting fast_llm_model to openrouter/<provider>/<model>
 # Example: openrouter/openai/gpt-5-mini
 # For self-hosted OpenAI-compatible servers (e.g. vLLM), set LLM_BASE_URL in .env.
