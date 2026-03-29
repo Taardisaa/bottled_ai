@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import json
 
-from rs.api.transport import GameTransport, ProtocolError, StdioGameTransport
+from rs.api.transport import GameTransport, ProtocolError, SocketGameTransport
 
 
 class Client:
 
     def __init__(self, transport: GameTransport | None = None):
-        self._transport = StdioGameTransport() if transport is None else transport
+        self._transport = SocketGameTransport.from_environment() if transport is None else transport
         self._connected = False
         self.connect()
 
@@ -25,6 +25,9 @@ class Client:
 
     def _validate_protocol_response(self, response: str) -> None:
         try:
-            json.loads(response)
+            payload = json.loads(response)
         except json.JSONDecodeError as error:
             raise ProtocolError(f"CommunicationMod returned malformed JSON: {error.msg}") from error
+
+        if isinstance(payload, dict) and payload.get("error"):
+            raise ProtocolError(f"CommunicationMod returned error response: {payload['error']}")

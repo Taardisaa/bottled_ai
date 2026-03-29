@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 import os
+import io
 
 from pydantic import BaseModel
 
@@ -87,6 +88,20 @@ class TestLiteLlmUtils(unittest.TestCase):
         counter_mock.assert_called_once_with(model="qwen-mlx", text="abc")
         tiktoken_mock.assert_not_called()
 
+    def test_litellm_stdout_noise_is_redirected_to_stderr(self):
+        stderr_capture = io.StringIO()
+
+        def noisy_counter(*args, **kwargs):
+            print("Provider List: https://docs.litellm.ai/docs/providers")
+            return 11
+
+        with patch("rs.utils.llm_utils.litellm_token_counter", side_effect=noisy_counter), \
+                patch.object(llm_utils.sys, "stderr", stderr_capture):
+            token_count = llm_utils.count_tokens("abc", "openai/qwen-mlx")
+
+        self.assertEqual(11, token_count)
+        self.assertIn("Provider List:", stderr_capture.getvalue())
+
     def test_get_model_token_limit_uses_litellm_with_normalized_model_name(self):
         with patch("rs.utils.llm_utils.litellm_get_max_tokens", return_value=98765) as max_tokens_mock:
             token_limit = llm_utils.get_model_token_limit("openrouter/openai/gpt-5-mini")
@@ -97,6 +112,10 @@ class TestLiteLlmUtils(unittest.TestCase):
     def test_get_model_token_limit_falls_back_to_local_override(self):
         with patch("rs.utils.llm_utils.litellm_get_max_tokens", return_value=None):
             self.assertEqual(272000, llm_utils.get_model_token_limit("openai/gpt-5"))
+
+    def test_get_model_token_limit_falls_back_to_static_qwen_mlx_limit(self):
+        with patch("rs.utils.llm_utils.litellm_get_max_tokens", side_effect=Exception("not mapped")):
+            self.assertEqual(262144, llm_utils.get_model_token_limit("openai/qwen-mlx"))
 
     def test_count_tokens_falls_back_to_tiktoken_without_warning_for_prefixed_model(self):
         class FakeEncoding:

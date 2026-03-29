@@ -1,7 +1,9 @@
+from contextlib import redirect_stdout
 from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import sys
 from typing import Optional, Any, Union, Tuple, List
 
 from collections.abc import Sequence
@@ -37,6 +39,8 @@ LLMLoadedResponse = Union[BaseModel, Dict]
 MODEL_TOKEN_LIMITS = {
     "gpt-5": 272000,
     "gpt-5-mini": 272000,
+    # Local MLX deployment configuration.
+    "qwen-mlx": 262144,
 }
 
 
@@ -207,7 +211,7 @@ def _normalized_model_token_limit_key(model: str) -> str:
 
 def _get_litellm_token_count(text: str, model: str) -> int:
     normalized_model = _normalize_model_for_tokenizer(model)
-    token_count = litellm_token_counter(model=normalized_model, text=text)
+    token_count = _call_litellm_quietly(litellm_token_counter, model=normalized_model, text=text)
     if not isinstance(token_count, int) or token_count < 0:
         raise ValueError(f"LiteLLM token counter returned invalid value: {token_count!r}")
     return token_count
@@ -225,7 +229,7 @@ def _log_tokenizer_fallback(model: str, source: str, error: Exception) -> None:
 def _encode_text_with_model_tokenizer(text: str, model: str) -> tuple[list[int], str]:
     normalized_model = _normalize_model_for_tokenizer(model)
     try:
-        token_ids = litellm_encode(model=normalized_model, text=text)
+        token_ids = _call_litellm_quietly(litellm_encode, model=normalized_model, text=text)
         if isinstance(token_ids, list):
             return token_ids, normalized_model
         raise ValueError(f"LiteLLM encode returned invalid value: {token_ids!r}")
@@ -238,7 +242,7 @@ def _encode_text_with_model_tokenizer(text: str, model: str) -> tuple[list[int],
 
 def _decode_tokens_with_model_tokenizer(token_ids: list[int], model: str, codec_id: str) -> str:
     if codec_id != "__tiktoken__":
-        return litellm_decode(model=codec_id, tokens=token_ids)
+        return _call_litellm_quietly(litellm_decode, model=codec_id, tokens=token_ids)
 
     encoding = _get_tiktoken_encoding(model, log_fallback=False)
     return encoding.decode(token_ids)
@@ -264,6 +268,12 @@ def _litellm_completion_kwargs(model: str, temperature: float, **extra_kwargs: A
         if value is not None:
             kwargs[key] = value
     return kwargs
+
+
+def _call_litellm_quietly(function: Any, *args: Any, **kwargs: Any) -> Any:
+    """Redirect Python-level stdout noise from LiteLLM-compatible libraries to stderr."""
+    with redirect_stdout(sys.stderr):
+        return function(*args, **kwargs)
 
 
 # TODO: Current impl only supports OpenAI and Anthropic models. Add more providers as needed.
@@ -332,7 +342,7 @@ def get_model_token_limit(model: str) -> int:
     """
     normalized_model = _normalize_model_for_tokenizer(model)
     try:
-        max_tokens = litellm_get_max_tokens(normalized_model)
+        max_tokens = _call_litellm_quietly(litellm_get_max_tokens, normalized_model)
         if isinstance(max_tokens, int) and max_tokens > 0:
             return max_tokens
     except Exception as e:
@@ -537,7 +547,8 @@ def run_llm_preflight_check(
             _normalize_temperature_for_model(requested_model, 0.0),
             max_tokens=16,
         )
-        raw_response = completion(
+        raw_response = _call_litellm_quietly(
+            completion,
             messages=[{"role": "user", "content": probe_message}],
             **completion_kwargs,
         )
@@ -664,7 +675,8 @@ def _ask_llm_once_two_layer(
 ) -> Tuple[Optional[LLMLoadedResponse], int]:
     first_temperature = _normalize_temperature_for_model(model, temperature)
     first_kwargs = _litellm_completion_kwargs(model, first_temperature)
-    first_raw = completion(
+    first_raw = _call_litellm_quietly(
+        completion,
         messages=[{"role": "user", "content": message}],
         **first_kwargs,
     )
@@ -700,7 +712,8 @@ def _ask_llm_once_two_layer(
         response_format=struct,
     )
 
-    second_raw = completion(
+    second_raw = _call_litellm_quietly(
+        completion,
         messages=[{"role": "user", "content": second_prompt}],
         **second_kwargs,
     )
@@ -775,7 +788,8 @@ def ask_llm_once(message: str,
             response_format = struct if struct is not None and isinstance(struct, type) and issubclass(struct, BaseModel) else None
             completion_kwargs = _litellm_completion_kwargs(model, temperature, response_format=response_format)
 
-            raw_response = completion(
+            raw_response = _call_litellm_quietly(
+                completion,
                 messages=[{"role": "user", "content": message}],
                 **completion_kwargs,
             )
@@ -889,7 +903,7 @@ def ask_llm_multi(messages: Sequence[Optional[str]], model: str = "gpt-5-mini",
         total_tokens = 0
         parsed_responses: List[Optional[LLMLoadedResponse]] = []
         try:
-            batch_raw = batch_completion(messages=batch_payload, **completion_kwargs)
+            batch_raw = _call_litellm_quietly(batch_completion, messages=batch_payload, **completion_kwargs)
             if not isinstance(batch_raw, list) or len(batch_raw) != len(batch_payload):
                 raise ValueError("Unexpected batch response shape")
 
@@ -902,7 +916,11 @@ def ask_llm_multi(messages: Sequence[Optional[str]], model: str = "gpt-5-mini",
             parsed_responses = []
             total_tokens = 0
             for msg in truncated_messages:
-                raw = completion(messages=[{"role": "user", "content": msg}], **completion_kwargs)
+                raw = _call_litellm_quietly(
+                    completion,
+                    messages=[{"role": "user", "content": msg}],
+                    **completion_kwargs,
+                )
                 parsed, token_count = _parse_litellm_response(raw, struct)
                 parsed_responses.append(parsed)
                 total_tokens += token_count

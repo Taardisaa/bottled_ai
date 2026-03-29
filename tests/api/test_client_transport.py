@@ -1,9 +1,21 @@
 import io
+import os
+import socket
+import threading
 import unittest
 from unittest.mock import patch
 
 from rs.api.client import Client
-from rs.api.transport import ProtocolError, StdioGameTransport, TransportError
+from rs.api.transport import (
+    COMMUNICATIONMOD_CONNECT_TIMEOUT_ENV,
+    COMMUNICATIONMOD_HOST_ENV,
+    COMMUNICATIONMOD_PORT_ENV,
+    COMMUNICATIONMOD_TRANSPORT_ENV,
+    ProtocolError,
+    SocketGameTransport,
+    StdioGameTransport,
+    TransportError,
+)
 
 
 class FakeTransport:
@@ -20,6 +32,47 @@ class FakeTransport:
         if not self.responses:
             raise AssertionError("No fake response available")
         return self.responses.pop(0)
+
+
+class SocketHarness:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.received = []
+        self._ready = threading.Event()
+        self._done = threading.Event()
+        self.port = None
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+        self._ready.wait(timeout=2)
+
+    def _run(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+            server.bind(("127.0.0.1", 0))
+            server.listen(1)
+            self.port = server.getsockname()[1]
+            self._ready.set()
+            connection, _ = server.accept()
+            with connection:
+                reader = connection.makefile("r", encoding="utf-8", newline="\n")
+                writer = connection.makefile("w", encoding="utf-8", newline="\n")
+                try:
+                    while True:
+                        message = reader.readline()
+                        if message == "":
+                            break
+                        self.received.append(message.rstrip("\r\n"))
+                        if not self._responses:
+                            break
+                        writer.write(self._responses.pop(0) + "\n")
+                        writer.flush()
+                finally:
+                    reader.close()
+                    writer.close()
+                    self._done.set()
+
+    def join(self):
+        self.thread.join(timeout=2)
+        self._done.wait(timeout=2)
 
 
 class TestStdioGameTransport(unittest.TestCase):
@@ -70,6 +123,48 @@ class TestStdioGameTransport(unittest.TestCase):
             transport.send("ready")
 
 
+class TestSocketGameTransport(unittest.TestCase):
+    def test_from_environment_connects_and_exchanges_messages(self):
+        harness = SocketHarness(['{"status": "ok"}'])
+        self.addCleanup(harness.join)
+
+        with patch.dict(os.environ, {
+            COMMUNICATIONMOD_TRANSPORT_ENV: "socket",
+            COMMUNICATIONMOD_HOST_ENV: "127.0.0.1",
+            COMMUNICATIONMOD_PORT_ENV: str(harness.port),
+            COMMUNICATIONMOD_CONNECT_TIMEOUT_ENV: "2",
+        }, clear=False):
+            transport = SocketGameTransport.from_environment()
+            self.addCleanup(transport.close)
+
+            response = transport.send("ready")
+
+        self.assertEqual('{"status": "ok"}', response)
+        self.assertEqual(["ready"], harness.received)
+
+    def test_from_environment_requires_socket_host(self):
+        with patch.dict(os.environ, {
+            COMMUNICATIONMOD_TRANSPORT_ENV: "socket",
+        }, clear=True):
+            with self.assertRaises(TransportError):
+                SocketGameTransport.from_environment()
+
+    def test_from_environment_raises_on_connection_failure(self):
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.bind(("127.0.0.1", 0))
+        _, port = probe.getsockname()
+        probe.close()
+
+        with patch.dict(os.environ, {
+            COMMUNICATIONMOD_TRANSPORT_ENV: "socket",
+            COMMUNICATIONMOD_HOST_ENV: "127.0.0.1",
+            COMMUNICATIONMOD_PORT_ENV: str(port),
+            COMMUNICATIONMOD_CONNECT_TIMEOUT_ENV: "0.2",
+        }, clear=False):
+            with self.assertRaises(TransportError):
+                SocketGameTransport.from_environment()
+
+
 class TestClient(unittest.TestCase):
     def test_client_connect_sends_ready_on_init(self):
         transport = FakeTransport(['{"status": "ok"}'])
@@ -94,8 +189,34 @@ class TestClient(unittest.TestCase):
         self.assertTrue(transport.calls[1]["silent"])
         self.assertTrue(transport.calls[1]["before_run"])
 
+    def test_client_uses_socket_transport_by_default(self):
+        harness = SocketHarness([
+            '{"status": "ok"}',
+            '{"game_state": {"screen_type": "EVENT"}}',
+        ])
+        self.addCleanup(harness.join)
+
+        with patch.dict(os.environ, {
+            COMMUNICATIONMOD_TRANSPORT_ENV: "socket",
+            COMMUNICATIONMOD_HOST_ENV: "127.0.0.1",
+            COMMUNICATIONMOD_PORT_ENV: str(harness.port),
+            COMMUNICATIONMOD_CONNECT_TIMEOUT_ENV: "2",
+        }, clear=False):
+            client = Client()
+            self.addCleanup(client._transport.close)
+            response = client.send_message("choose 0")
+
+        self.assertEqual('{"game_state": {"screen_type": "EVENT"}}', response)
+        self.assertEqual(["ready", "choose 0"], harness.received)
+
     def test_client_raises_on_malformed_json_response(self):
         transport = FakeTransport(["not-json"])
+
+        with self.assertRaises(ProtocolError):
+            Client(transport=transport)
+
+    def test_client_raises_on_communication_mod_error_payload(self):
+        transport = FakeTransport(['{"error": "Invalid command: give", "ready_for_command": true}'])
 
         with self.assertRaises(ProtocolError):
             Client(transport=transport)

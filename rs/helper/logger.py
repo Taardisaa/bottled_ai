@@ -1,3 +1,4 @@
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import List
@@ -19,6 +20,20 @@ current_run_calculator_missing_cards: set[str] = set()
 current_run_missing_events: set[str] = set()
 
 LOG_DIR = Path(ROOT_DIR) / "logs"
+_console_logger_configured = False
+
+
+def configure_console_logging() -> None:
+    """Route application logs to stderr so stdout remains protocol-safe."""
+    global _console_logger_configured
+    if _console_logger_configured:
+        return
+    loguru_logger.remove()
+    loguru_logger.add(sys.stderr)
+    _console_logger_configured = True
+
+
+configure_console_logging()
 
 
 def _log_path(filename: str) -> Path:

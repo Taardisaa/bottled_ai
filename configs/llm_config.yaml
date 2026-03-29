@@ -10,9 +10,9 @@ max_retries: 1
 confidence_threshold: 0.0
 telemetry_enabled: true
 telemetry_path: logs/llm_decisions.jsonl
-ai_player_graph_enabled: false
+ai_player_graph_enabled: true
 langmem:
-  enabled: false
+  enabled: true
   sqlite_path: dataset/langmem/memory.sqlite3
   embeddings_base_url: ""
   embeddings_api_key: ""
