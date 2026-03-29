@@ -25,6 +25,7 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                     "confidence_threshold: 0.55",
                     "telemetry_enabled: false",
                     "telemetry_path: logs/custom.jsonl",
+                    "ai_player_graph_enabled: true",
                 ]),
                 encoding="utf-8",
             )
@@ -37,6 +38,7 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                 "LLM_CONFIDENCE_THRESHOLD",
                 "LLM_TELEMETRY_ENABLED",
                 "LLM_TELEMETRY_PATH",
+                "AI_PLAYER_GRAPH_ENABLED",
                 "LANGMEM_ENABLED",
                 "LANGMEM_SQLITE_PATH",
                 "LANGMEM_EMBEDDINGS_BASE_URL",
@@ -64,6 +66,7 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
             self.assertEqual(0.55, config.confidence_threshold)
             self.assertFalse(config.telemetry_enabled)
             self.assertEqual("logs/custom.jsonl", config.telemetry_path)
+            self.assertTrue(config.ai_player_graph_enabled)
             self.assertFalse(config.langmem_enabled)
             self.assertEqual("dataset/langmem/memory.sqlite3", config.langmem_sqlite_path)
             self.assertEqual("bge-small-en-v1.5", config.langmem_embeddings_model)
@@ -79,6 +82,7 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                     "confidence_threshold: 0.4",
                     "telemetry_enabled: true",
                     "telemetry_path: logs/base.jsonl",
+                    "ai_player_graph_enabled: false",
                 ]),
                 encoding="utf-8",
             )
@@ -89,6 +93,7 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                 "LLM_TIMEOUT_MS",
                 "LLM_MAX_RETRIES",
                 "LLM_CONFIDENCE_THRESHOLD",
+                "AI_PLAYER_GRAPH_ENABLED",
                 "LANGMEM_ENABLED",
                 "LANGMEM_SQLITE_PATH",
                 "LANGMEM_EMBEDDINGS_BASE_URL",
@@ -105,6 +110,7 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                 os.environ["LLM_TIMEOUT_MS"] = "2200"
                 os.environ["LLM_MAX_RETRIES"] = "4"
                 os.environ["LLM_CONFIDENCE_THRESHOLD"] = "0.77"
+                os.environ["AI_PLAYER_GRAPH_ENABLED"] = "true"
                 os.environ["LANGMEM_ENABLED"] = "true"
                 os.environ["LANGMEM_SQLITE_PATH"] = "dataset/test_langmem.sqlite3"
                 os.environ["LANGMEM_EMBEDDINGS_BASE_URL"] = "http://127.0.0.1:9000/v1"
@@ -127,6 +133,7 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
             self.assertEqual(2200, config.timeout_ms)
             self.assertEqual(4, config.max_retries)
             self.assertEqual(0.77, config.confidence_threshold)
+            self.assertTrue(config.ai_player_graph_enabled)
             self.assertTrue(config.langmem_enabled)
             self.assertEqual("dataset/test_langmem.sqlite3", config.langmem_sqlite_path)
             self.assertEqual("http://127.0.0.1:9000/v1", config.langmem_embeddings_base_url)

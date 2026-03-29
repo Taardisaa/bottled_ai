@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from rs.ai.smart_agent.handlers.shop_purchase_handler import ShopPurchaseHandler
 from rs.llm.agents.base_agent import AgentContext, BaseAgent
@@ -41,6 +42,18 @@ class TestSmartShopPurchaseHandlerLlmAdvisor(unittest.TestCase):
         state = load_resource_state("/shop/shop_buy_perfected_strike.json")
 
         action = handler.handle(state)
+
+        self.assertEqual(["choose 1", "wait 30"], action.commands)
+
+    def test_unified_graph_mode_skips_handler_advisor_path(self):
+        orchestrator = AIPlayerAgent(config=LlmConfig(enabled=True, telemetry_enabled=False))
+        orchestrator.register_agent("ShopPurchaseHandler", StaticDecisionAgent("return"))
+
+        handler = ShopPurchaseHandler(advisor_orchestrator=orchestrator)
+        state = load_resource_state("/shop/shop_buy_perfected_strike.json")
+
+        with patch("rs.ai.smart_agent.handlers.shop_purchase_handler.is_ai_player_graph_enabled", return_value=True):
+            action = handler.handle(state)
 
         self.assertEqual(["choose 1", "wait 30"], action.commands)
 

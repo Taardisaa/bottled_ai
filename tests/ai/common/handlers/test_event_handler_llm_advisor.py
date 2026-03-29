@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from rs.common.handlers.common_event_handler import CommonEventHandler
 from rs.llm.agents.base_agent import AgentContext, BaseAgent
@@ -49,6 +50,22 @@ class TestEventHandlerLlmAdvisor(unittest.TestCase):
         state = load_resource_state("/event/divine_fountain.json")
 
         action = handler.handle(state)
+
+        self.assertEqual(["choose 0", "wait 30"], action.commands)
+
+    def test_unified_graph_mode_skips_handler_advisor_path(self):
+        orchestrator = AIPlayerAgent(config=LlmConfig(enabled=True, telemetry_enabled=False))
+        orchestrator.register_agent("EventHandler", StaticDecisionAgent("choose 1"))
+
+        handler = CommonEventHandler(
+            removal_priority_list=[],
+            cards_desired_for_deck={},
+            advisor_orchestrator=orchestrator,
+        )
+        state = load_resource_state("/event/divine_fountain.json")
+
+        with patch("rs.common.handlers.common_event_handler.is_ai_player_graph_enabled", return_value=True):
+            action = handler.handle(state)
 
         self.assertEqual(["choose 0", "wait 30"], action.commands)
 

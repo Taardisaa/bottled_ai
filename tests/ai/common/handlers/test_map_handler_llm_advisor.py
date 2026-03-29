@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from rs.common.handlers.common_map_handler import CommonMapHandler
 from rs.llm.agents.base_agent import AgentContext, BaseAgent
@@ -41,6 +42,18 @@ class TestMapHandlerLlmAdvisor(unittest.TestCase):
         state = load_resource_state("path/path_basic.json")
 
         action = handler.handle(state)
+
+        self.assertEqual(["choose 0"], action.commands)
+
+    def test_unified_graph_mode_skips_handler_advisor_path(self):
+        orchestrator = AIPlayerAgent(config=LlmConfig(enabled=True, telemetry_enabled=False))
+        orchestrator.register_agent("MapHandler", StaticDecisionAgent("choose 1"))
+
+        handler = CommonMapHandler(advisor_orchestrator=orchestrator)
+        state = load_resource_state("path/path_basic.json")
+
+        with patch("rs.common.handlers.common_map_handler.is_ai_player_graph_enabled", return_value=True):
+            action = handler.handle(state)
 
         self.assertEqual(["choose 0"], action.commands)
 

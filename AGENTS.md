@@ -155,3 +155,17 @@ Notes:
 - No `.cursor/rules/` directory found.
 - No `.github/copilot-instructions.md` file found.
 - If these are added later, treat them as higher-priority instructions.
+
+## Commit & Push
+
+A commit message should be in the following format: a description + per-file breakdown of the changes.
+
+```
+a brief description of this commit.
+
+- file1: what's changed
+- file2: ...
+- ...
+```
+
+When asked to push the change to remote repo, unless explictly required, if this repo is a forked repo, do NOT push the changes into the original repo as a pull request. Just push the changes into our forked repo.

@@ -4,7 +4,7 @@ from rs.game.screen_type import ScreenType
 from rs.helper.logger import log_missing_event
 from rs.llm.integration.event_context import build_event_agent_context
 from rs.llm.orchestrator import AIPlayerAgent
-from rs.llm.runtime import get_event_orchestrator
+from rs.llm.runtime import get_event_orchestrator, is_ai_player_graph_enabled
 from rs.machine.command import Command
 from rs.machine.handlers.handler import Handler
 from rs.machine.handlers.handler_action import HandlerAction
@@ -47,6 +47,9 @@ class CommonEventHandler(Handler):
         return HandlerAction(commands=["choose 0", "wait 30"])
 
     def find_advisor_choice(self, state: GameState) -> str | None:
+        if is_ai_player_graph_enabled():
+            return None
+
         context = build_event_agent_context(state, type(self).__name__)
 
         decision = self.advisor_orchestrator.decide("EventHandler", context)

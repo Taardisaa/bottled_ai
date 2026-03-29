@@ -10,6 +10,7 @@ max_retries: 1
 confidence_threshold: 0.0
 telemetry_enabled: true
 telemetry_path: logs/llm_decisions.jsonl
+ai_player_graph_enabled: false
 langmem:
   enabled: false
   sqlite_path: dataset/langmem/memory.sqlite3

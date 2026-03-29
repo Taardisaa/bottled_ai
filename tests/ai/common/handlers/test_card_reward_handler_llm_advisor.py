@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from rs.common.handlers.card_reward.common_card_reward_handler import CommonCardRewardHandler
 from rs.llm.agents.base_agent import AgentContext, BaseAgent
@@ -47,6 +48,24 @@ class TestCardRewardHandlerLlmAdvisor(unittest.TestCase):
         state = load_resource_state("/card_reward/card_reward_take.json")
 
         action = handler.handle(state)
+
+        self.assertEqual(["skip", "proceed"], action.commands)
+
+    def test_unified_graph_mode_skips_handler_advisor_path(self):
+        orchestrator = AIPlayerAgent(config=LlmConfig(enabled=True, telemetry_enabled=False))
+        orchestrator.register_agent("CardRewardHandler", StaticDecisionAgent("choose 1"))
+
+        handler = CommonCardRewardHandler(
+            cards_desired_for_deck={"perfected strike": 1},
+            advisor_orchestrator=orchestrator,
+        )
+        state = load_resource_state("/card_reward/card_reward_take.json")
+
+        with patch(
+                "rs.common.handlers.card_reward.common_card_reward_handler.is_ai_player_graph_enabled",
+                return_value=True,
+        ):
+            action = handler.handle(state)
 
         self.assertEqual(["skip", "proceed"], action.commands)
 

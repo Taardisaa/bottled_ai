@@ -5,7 +5,7 @@ from presentation_config import presentation_mode, p_delay
 from rs.game.screen_type import ScreenType
 from rs.llm.integration.card_reward_context import build_card_reward_agent_context
 from rs.llm.orchestrator import AIPlayerAgent
-from rs.llm.runtime import get_event_orchestrator
+from rs.llm.runtime import get_event_orchestrator, is_ai_player_graph_enabled
 from rs.machine.command import Command
 from rs.machine.handlers.handler import Handler
 from rs.machine.handlers.handler_action import HandlerAction
@@ -91,6 +91,9 @@ class CommonCardRewardHandler(Handler):
         return HandlerAction(commands=["skip", "proceed"])  # So we don't look at the card rewards again.
 
     def find_advisor_choice(self, state: GameState) -> str | None:
+        if is_ai_player_graph_enabled():
+            return None
+
         if self.advisor_orchestrator is None and os.environ.get("LLM_ENABLED", "").strip().lower() in {"0", "false", "no", "off"}:
             return None
 

@@ -5,7 +5,7 @@ from rs.ai.smart_agent.config import CARD_REMOVAL_PRIORITY_LIST
 from rs.game.screen_type import ScreenType
 from rs.llm.integration.shop_purchase_context import build_shop_purchase_agent_context
 from rs.llm.orchestrator import AIPlayerAgent
-from rs.llm.runtime import get_event_orchestrator
+from rs.llm.runtime import get_event_orchestrator, is_ai_player_graph_enabled
 from rs.machine.handlers.handler import Handler
 from rs.machine.handlers.handler_action import HandlerAction
 from rs.machine.state import GameState
@@ -126,6 +126,9 @@ class ShopPurchaseHandler(Handler):
         return ''
 
     def find_advisor_choice(self, state: GameState) -> str | None:
+        if is_ai_player_graph_enabled():
+            return None
+
         if self.advisor_orchestrator is None and os.environ.get("LLM_ENABLED", "").strip().lower() in {"0", "false", "no", "off"}:
             return None
 

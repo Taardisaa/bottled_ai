@@ -7,7 +7,7 @@ from rs.game.path import PathHandlerConfig
 from rs.game.screen_type import ScreenType
 from rs.llm.integration.map_context import build_map_agent_context
 from rs.llm.orchestrator import AIPlayerAgent
-from rs.llm.runtime import get_event_orchestrator
+from rs.llm.runtime import get_event_orchestrator, is_ai_player_graph_enabled
 from rs.machine.command import Command
 from rs.machine.handlers.handler import Handler
 from rs.machine.handlers.handler_action import HandlerAction
@@ -64,6 +64,9 @@ class CommonMapHandler(Handler):
         return HandlerAction(commands=["choose " + str(game_map.get_path_choice_from_choices(state.get_choice_list()))])
 
     def find_advisor_choice(self, state: GameState) -> str | None:
+        if is_ai_player_graph_enabled():
+            return None
+
         if self.advisor_orchestrator is None and os.environ.get("LLM_ENABLED", "").strip().lower() in {
             "0", "false", "no", "off"
         }:

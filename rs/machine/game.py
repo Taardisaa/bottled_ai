@@ -8,6 +8,7 @@ from rs.helper.seed import get_seed_string
 from rs.llm.agents.base_agent import AgentContext
 from rs.llm.langmem_service import get_langmem_service
 from rs.llm.run_context import set_current_strategy_name
+from rs.llm.runtime import get_ai_player_graph
 from rs.machine.ai_strategy import AiStrategy
 from rs.machine.default_game_over import DefaultGameOverHandler
 from rs.machine.handlers.default_cancel import DefaultCancelHandler
@@ -70,6 +71,12 @@ class Game:
                     for command in commands:
                         self.__send_command(command)
                     break
+                graph_commands = self.__decide_with_ai_player_graph()
+                if graph_commands is not None:
+                    for command in graph_commands:
+                        self.__send_command(command)
+                    handled = True
+                    continue
                 # All other behaviours
                 for handler in self.strategy.handlers + DEFAULT_GAME_HANDLERS:
                     if handler.can_handle(self.last_state):
@@ -150,3 +157,14 @@ class Game:
             "run_memory_summary": context.extras["run_memory_summary"],
         }
         get_langmem_service().finalize_run(context, payload)
+
+    def __decide_with_ai_player_graph(self) -> list[str] | None:
+        if self.last_state is None:
+            return None
+
+        ai_player_graph = get_ai_player_graph()
+        if not ai_player_graph.is_enabled() or not ai_player_graph.can_handle(self.last_state):
+            return None
+
+        log_to_run("Handler: AIPlayerGraph")
+        return ai_player_graph.decide(self.last_state)
