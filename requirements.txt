@@ -21,3 +21,4 @@ tiktoken
 torch
 torchvision
 sentence-transformers
+networkx

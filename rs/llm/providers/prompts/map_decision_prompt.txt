@@ -34,9 +34,10 @@ Current relics: {relic_names}
 Held potions: {held_potion_names}
 Potion slots full: {potions_full}
 Deck profile: {deck_profile}
-Next nodes: {next_nodes}
 Boss available: {boss_available}
 First node already chosen: {first_node_chosen}
 Deterministic best command: {deterministic_best_command}
-Choice path overviews (one per choice, worst to best): {choice_path_overviews}
-Sorted path summaries (worst to best): {sorted_path_summaries}
+Choice branch summaries:
+{choice_branch_summaries_text}
+Representative descendant paths:
+{choice_representative_paths_text}

@@ -8,3 +8,9 @@ CommonNeowHandler is not implemented
 
 _build_memory_augmented_context is too rough. this isn't how modern agent memory is built.
 
+
+
+## Map
+
+subagent. langgraph based. Feed with analysis tools (calculator, coding abilities).
+

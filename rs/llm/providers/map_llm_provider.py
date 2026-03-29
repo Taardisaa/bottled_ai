@@ -100,6 +100,12 @@ class MapLlmProvider:
         deck_direction = str(context.extras.get("deck_direction", "unknown") or "unknown")
         run_hypotheses = self._format_list_field(context.extras.get("run_hypotheses"), default="none")
         map_options_text = self._format_choice_list(context.choice_list)
+        choice_branch_summaries_text = self._format_choice_branch_summaries(
+            context.extras.get("choice_branch_summaries", []),
+        )
+        choice_representative_paths_text = self._format_choice_representative_paths(
+            context.extras.get("choice_representative_paths", []),
+        )
         return PROMPT_TEMPLATE.format(
             handler_name=context.handler_name,
             screen_type=context.screen_type,
@@ -128,12 +134,11 @@ class MapLlmProvider:
             held_potion_names=json.dumps(context.extras.get("held_potion_names", []), sort_keys=True),
             potions_full=context.extras.get("potions_full", False),
             deck_profile=json.dumps(context.extras.get("deck_profile", {}), sort_keys=True),
-            next_nodes=json.dumps(context.extras.get("next_nodes", []), sort_keys=True),
             boss_available=context.extras.get("boss_available", False),
             first_node_chosen=context.extras.get("first_node_chosen", False),
             deterministic_best_command=context.extras.get("deterministic_best_command", "unknown"),
-            choice_path_overviews=json.dumps(context.extras.get("choice_path_overviews", []), sort_keys=True),
-            sorted_path_summaries=json.dumps(context.extras.get("sorted_path_summaries", []), sort_keys=True),
+            choice_branch_summaries_text=choice_branch_summaries_text,
+            choice_representative_paths_text=choice_representative_paths_text,
         )
 
     def _format_choice_list(self, choice_list: list[Any]) -> str:
@@ -155,3 +160,67 @@ class MapLlmProvider:
             return ", ".join(normalized_values) if normalized_values else default
         value_text = str(value or "").strip()
         return value_text if value_text else default
+
+    def _format_choice_branch_summaries(self, branch_summaries: Any) -> str:
+        if not isinstance(branch_summaries, list) or not branch_summaries:
+            return "- none"
+
+        rendered_summaries: list[str] = []
+        for summary in branch_summaries:
+            if not isinstance(summary, dict):
+                continue
+            rendered_summaries.append(
+                (
+                    f"- {summary.get('choice_index', '?')} | {summary.get('choice_label', 'unknown')} | "
+                    f"{summary.get('choice_command', 'unknown')} | paths={summary.get('path_count', 0)} | "
+                    f"monsters={self._format_range(summary.get('monster_count_range'))} | "
+                    f"events={self._format_range(summary.get('event_count_range'))} | "
+                    f"shops={self._format_range(summary.get('shop_count_range'))} | "
+                    f"campfires={self._format_range(summary.get('campfire_count_range'))} | "
+                    f"elites={self._format_range(summary.get('elite_count_range'))} | "
+                    f"treasure={self._format_range(summary.get('treasure_count_range'))} | "
+                    f"first_shop={self._format_range(summary.get('first_shop_distance_range'))} | "
+                    f"first_campfire={self._format_range(summary.get('first_campfire_distance_range'))} | "
+                    f"first_elite={self._format_range(summary.get('first_elite_distance_range'))} | "
+                    f"shape={summary.get('branch_shape_summary', 'unknown')}"
+                )
+            )
+        return "\n".join(rendered_summaries) if rendered_summaries else "- none"
+
+    def _format_choice_representative_paths(self, representative_groups: Any) -> str:
+        if not isinstance(representative_groups, list) or not representative_groups:
+            return "- none"
+
+        rendered_groups: list[str] = []
+        for group in representative_groups:
+            if not isinstance(group, dict):
+                continue
+            representative_paths = group.get("representative_paths", [])
+            if not isinstance(representative_paths, list) or not representative_paths:
+                continue
+            rendered_groups.append(
+                f"- {group.get('choice_index', '?')} | {group.get('choice_label', 'unknown')} | {group.get('choice_command', 'unknown')}:"
+            )
+            for path in representative_paths:
+                if not isinstance(path, dict):
+                    continue
+                rooms = " > ".join(str(room) for room in path.get("rooms", [])) or "none"
+                rendered_groups.append(
+                    (
+                        f"  - rooms={rooms} | room_counts={json.dumps(path.get('room_counts', {}), sort_keys=True)} | "
+                        f"path_length={path.get('path_length', 'unknown')} | "
+                        f"first_shop={path.get('first_shop_distance', 'none')} | "
+                        f"first_campfire={path.get('first_campfire_distance', 'none')} | "
+                        f"first_elite={path.get('first_elite_distance', 'none')}"
+                    )
+                )
+        return "\n".join(rendered_groups) if rendered_groups else "- none"
+
+    def _format_range(self, value: Any) -> str:
+        if not isinstance(value, dict):
+            return "none"
+        if "min" not in value or "max" not in value:
+            return "none"
+        if value["min"] == value["max"]:
+            return str(value["min"])
+        return f"{value['min']}-{value['max']}"
