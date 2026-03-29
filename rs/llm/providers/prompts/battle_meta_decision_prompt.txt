@@ -17,6 +17,9 @@ Current battle state:
 - Player energy: {player_energy}
 - Run memory summary: {run_memory_summary}
 - Recent LLM decisions: {recent_llm_decisions}
+- LangMem status: {langmem_status}
+- Retrieved episodic memories: {retrieved_episodic_memories}
+- Retrieved semantic memories: {retrieved_semantic_memories}
 
 Comparator profiles:
 - Deterministic profile: {deterministic_profile}

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from rs.llm.agents.base_agent import AgentContext
+from rs.llm.run_context import get_current_strategy_name
 from rs.llm.state_summary_cache import get_cached_run_summary
 from rs.machine.state import GameState
 
@@ -75,6 +76,7 @@ def build_battle_meta_agent_context(
         },
         extras={
             "run_id": run_summary["run_id"],
+            "strategy_name": get_current_strategy_name(),
             "deterministic_profile": deterministic_profile,
             "available_profiles": available_profiles,
             "monster_summaries": _build_monster_summaries(state),

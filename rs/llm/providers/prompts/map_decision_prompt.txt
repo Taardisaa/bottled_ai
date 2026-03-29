@@ -19,6 +19,9 @@ Class: {character_class}, Ascension: {ascension_level}, Act boss: {act_boss}
 Current position: {current_position}
 Run memory summary: {run_memory_summary}
 Recent LLM decisions: {recent_llm_decisions}
+LangMem status: {langmem_status}
+Retrieved episodic memories: {retrieved_episodic_memories}
+Retrieved semantic memories: {retrieved_semantic_memories}
 Current relics: {relic_names}
 Held potions: {held_potion_names}
 Potion slots full: {potions_full}

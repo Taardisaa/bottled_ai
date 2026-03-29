@@ -5,6 +5,9 @@ from rs.api.client import Client
 from rs.helper.controller import await_controller
 from rs.helper.logger import init_run_logging, log_to_run
 from rs.helper.seed import get_seed_string
+from rs.llm.agents.base_agent import AgentContext
+from rs.llm.langmem_service import get_langmem_service
+from rs.llm.run_context import set_current_strategy_name
 from rs.machine.ai_strategy import AiStrategy
 from rs.machine.default_game_over import DefaultGameOverHandler
 from rs.machine.handlers.default_cancel import DefaultCancelHandler
@@ -41,6 +44,7 @@ class Game:
 
     def start(self, seed: str = ""):
         self.the_bots_memory_book.set_new_game_state()
+        set_current_strategy_name(self.strategy.name)
         self.run_elites = []
         self.last_elite = ""
         self.run_bosses = []
@@ -55,33 +59,36 @@ class Game:
 
     def run(self):
         log_to_run("Starting Run")
-        while self.last_state.is_game_running():
-            await_controller(self.last_state)
-            self.__handle_state_based_logging()
-            handled = False
-            # Handle Game Over
-            if self.game_over_handler.can_handle(self.last_state):
-                commands = self.game_over_handler.handle(self.last_state, self.run_elites, self.run_bosses, self.strategy.name)
-                for command in commands:
-                    self.__send_command(command)
-                break
-            # All other behaviours
-            for handler in self.strategy.handlers + DEFAULT_GAME_HANDLERS:
-                if handler.can_handle(self.last_state):
-                    log_to_run("Handler: " + str(handler))
-                    action = handler.handle(self.last_state)
-                    if not action:
-                        continue
-                    if action.memory_book is not None:
-                        self.the_bots_memory_book = action.memory_book
-                        log_to_run("Memory of next action: " + str(vars(self.the_bots_memory_book)))
-                    for command in action.commands:
+        try:
+            while self.last_state.is_game_running():
+                await_controller(self.last_state)
+                self.__handle_state_based_logging()
+                handled = False
+                # Handle Game Over
+                if self.game_over_handler.can_handle(self.last_state):
+                    commands = self.game_over_handler.handle(self.last_state, self.run_elites, self.run_bosses, self.strategy.name)
+                    for command in commands:
                         self.__send_command(command)
-                    handled = True
                     break
-            if not handled:
-                log_to_run("Dying from not knowing what to do next")
-                raise Exception("ah I didn't know what to do!")
+                # All other behaviours
+                for handler in self.strategy.handlers + DEFAULT_GAME_HANDLERS:
+                    if handler.can_handle(self.last_state):
+                        log_to_run("Handler: " + str(handler))
+                        action = handler.handle(self.last_state)
+                        if not action:
+                            continue
+                        if action.memory_book is not None:
+                            self.the_bots_memory_book = action.memory_book
+                            log_to_run("Memory of next action: " + str(vars(self.the_bots_memory_book)))
+                        for command in action.commands:
+                            self.__send_command(command)
+                        handled = True
+                        break
+                if not handled:
+                    log_to_run("Dying from not knowing what to do next")
+                    raise Exception("ah I didn't know what to do!")
+        finally:
+            self.__finalize_langmem_run()
 
     def __send_command(self, command: str):
         self.last_state = GameState(json.loads(self.client.send_message(command)), self.the_bots_memory_book)
@@ -108,3 +115,38 @@ class Game:
             elif self.last_boss:
                 self.run_bosses.append(self.last_boss)
                 self.last_boss = ""
+
+    def __finalize_langmem_run(self):
+        if self.last_state is None:
+            return
+
+        game_state = self.last_state.game_state()
+        context = AgentContext(
+            handler_name="RunFinalizer",
+            screen_type=self.last_state.screen_type(),
+            available_commands=[],
+            choice_list=[],
+            game_state={
+                "floor": self.last_state.floor(),
+                "act": game_state.get("act"),
+                "character_class": game_state.get("class"),
+            },
+            extras={
+                "run_id": f"{str(game_state.get('class', 'unknown')).strip().lower()}:{str(game_state.get('seed', 'unknown')).strip().lower()}",
+                "strategy_name": self.strategy.name,
+                "run_memory_summary": (
+                    f"{game_state.get('class', 'unknown')} act {game_state.get('act', 'unknown')} "
+                    f"floor {self.last_state.floor()} hp {game_state.get('current_hp', 'unknown')}/"
+                    f"{game_state.get('max_hp', 'unknown')} gold {game_state.get('gold', 'unknown')}"
+                ),
+            },
+        )
+        payload = {
+            "floor": self.last_state.floor(),
+            "score": self.last_state.screen_state().get("score"),
+            "victory": not self.last_state.is_game_running(),
+            "bosses": list(self.run_bosses),
+            "elites": list(self.run_elites),
+            "run_memory_summary": context.extras["run_memory_summary"],
+        }
+        get_langmem_service().finalize_run(context, payload)

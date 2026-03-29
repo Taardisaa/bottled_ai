@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict, Protocol
 
 from rs.llm.agents.base_agent import AgentContext
+from rs.llm.langmem_service import LangMemService
 from rs.llm.agents.memory_langgraph_agent import MemoryAugmentedLangGraphAgent
 from rs.llm.providers.shop_purchase_llm_provider import ShopPurchaseLlmProposal, ShopPurchaseLlmProvider
 
@@ -19,8 +20,9 @@ class ShopPurchaseAdvisorAgent(MemoryAugmentedLangGraphAgent):
             self,
             timeout_ms: int = 1500,
             llm_provider: ShopPurchaseProposalProvider | None = None,
+            langmem_service: LangMemService | None = None,
     ):
-        super().__init__(name="shop_purchase_advisor", timeout_ms=timeout_ms)
+        super().__init__(name="shop_purchase_advisor", timeout_ms=timeout_ms, langmem_service=langmem_service)
         self._llm_provider: ShopPurchaseProposalProvider = ShopPurchaseLlmProvider() if llm_provider is None else llm_provider
 
     def propose_with_context(self, context: AgentContext) -> ShopPurchaseLlmProposal:

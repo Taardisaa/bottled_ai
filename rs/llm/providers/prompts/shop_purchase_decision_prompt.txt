@@ -17,6 +17,9 @@ Room type: {room_type}
 Class: {character_class}, Ascension: {ascension_level}, Act boss: {act_boss}
 Run memory summary: {run_memory_summary}
 Recent LLM decisions: {recent_llm_decisions}
+LangMem status: {langmem_status}
+Retrieved episodic memories: {retrieved_episodic_memories}
+Retrieved semantic memories: {retrieved_semantic_memories}
 Has removable curse: {has_removable_curse}
 Deck size: {deck_size}
 Deck profile: {deck_profile}

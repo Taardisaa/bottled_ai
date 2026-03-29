@@ -20,6 +20,14 @@ class LlmConfig:
     confidence_threshold: float = 0.4
     telemetry_enabled: bool = True
     telemetry_path: str = "logs/llm_decisions.jsonl"
+    langmem_enabled: bool = False
+    langmem_sqlite_path: str = "dataset/langmem/memory.sqlite3"
+    langmem_embeddings_base_url: str = ""
+    langmem_embeddings_api_key: str = ""
+    langmem_embeddings_model: str = "bge-small-en-v1.5"
+    langmem_top_k: int = 3
+    langmem_reflection_batch_size: int = 5
+    langmem_max_semantic_memories_per_namespace: int = 50
 
     def __post_init__(self):
         """Normalize mutable defaults after dataclass initialization.
@@ -80,6 +88,17 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
     confidence_default = float(values.get("confidence_threshold", 0.4))
     telemetry_enabled_default = bool(values.get("telemetry_enabled", True))
     telemetry_path_default = str(values.get("telemetry_path", "logs/llm_decisions.jsonl"))
+    langmem_values = values.get("langmem", {})
+    langmem_enabled_default = bool(langmem_values.get("enabled", False))
+    langmem_sqlite_path_default = str(langmem_values.get("sqlite_path", "dataset/langmem/memory.sqlite3"))
+    langmem_embeddings_base_url_default = str(langmem_values.get("embeddings_base_url", ""))
+    langmem_embeddings_api_key_default = str(langmem_values.get("embeddings_api_key", ""))
+    langmem_embeddings_model_default = str(langmem_values.get("embeddings_model", "bge-small-en-v1.5"))
+    langmem_top_k_default = int(langmem_values.get("top_k", 3))
+    langmem_reflection_batch_size_default = int(langmem_values.get("reflection_batch_size", 5))
+    langmem_max_semantic_memories_per_namespace_default = int(
+        langmem_values.get("max_semantic_memories_per_namespace", 50)
+    )
 
     enabled = _parse_bool(os.environ.get("LLM_ENABLED"), enabled_default)
     enabled_handlers = _parse_handlers(os.environ.get("LLM_ENABLED_HANDLERS"), enabled_handlers_default)
@@ -88,6 +107,30 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
     confidence_threshold = float(os.environ.get("LLM_CONFIDENCE_THRESHOLD", str(confidence_default)))
     telemetry_enabled = _parse_bool(os.environ.get("LLM_TELEMETRY_ENABLED"), telemetry_enabled_default)
     telemetry_path = os.environ.get("LLM_TELEMETRY_PATH", telemetry_path_default)
+    langmem_enabled = _parse_bool(os.environ.get("LANGMEM_ENABLED"), langmem_enabled_default)
+    langmem_sqlite_path = os.environ.get("LANGMEM_SQLITE_PATH", langmem_sqlite_path_default)
+    langmem_embeddings_base_url = os.environ.get(
+        "LANGMEM_EMBEDDINGS_BASE_URL",
+        langmem_embeddings_base_url_default,
+    )
+    langmem_embeddings_api_key = os.environ.get(
+        "LANGMEM_EMBEDDINGS_API_KEY",
+        langmem_embeddings_api_key_default,
+    )
+    langmem_embeddings_model = os.environ.get(
+        "LANGMEM_EMBEDDINGS_MODEL",
+        langmem_embeddings_model_default,
+    )
+    langmem_top_k = int(os.environ.get("LANGMEM_TOP_K", str(langmem_top_k_default)))
+    langmem_reflection_batch_size = int(
+        os.environ.get("LANGMEM_REFLECTION_BATCH_SIZE", str(langmem_reflection_batch_size_default))
+    )
+    langmem_max_semantic_memories_per_namespace = int(
+        os.environ.get(
+            "LANGMEM_MAX_SEMANTIC_MEMORIES_PER_NAMESPACE",
+            str(langmem_max_semantic_memories_per_namespace_default),
+        )
+    )
 
     return LlmConfig(
         enabled=enabled,
@@ -97,4 +140,12 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
         confidence_threshold=confidence_threshold,
         telemetry_enabled=telemetry_enabled,
         telemetry_path=telemetry_path,
+        langmem_enabled=langmem_enabled,
+        langmem_sqlite_path=langmem_sqlite_path,
+        langmem_embeddings_base_url=langmem_embeddings_base_url,
+        langmem_embeddings_api_key=langmem_embeddings_api_key,
+        langmem_embeddings_model=langmem_embeddings_model,
+        langmem_top_k=langmem_top_k,
+        langmem_reflection_batch_size=langmem_reflection_batch_size,
+        langmem_max_semantic_memories_per_namespace=langmem_max_semantic_memories_per_namespace,
     )

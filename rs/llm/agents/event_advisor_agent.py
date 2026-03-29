@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, Protocol
 
 from rs.llm.agents.base_agent import AgentContext
+from rs.llm.langmem_service import LangMemService
 from rs.llm.agents.memory_langgraph_agent import MemoryAugmentedLangGraphAgent
 from rs.llm.providers.event_llm_provider import EventLlmProposal, EventLlmProvider
 
@@ -28,8 +29,9 @@ class EventAdvisorAgent(MemoryAugmentedLangGraphAgent):
             timeout_ms: int = 1500,
             decision_provider: DecisionProvider | None = None,
             llm_provider: EventProposalProvider | None = None,
+            langmem_service: LangMemService | None = None,
     ):
-        super().__init__(name="event_advisor", timeout_ms=timeout_ms)
+        super().__init__(name="event_advisor", timeout_ms=timeout_ms, langmem_service=langmem_service)
         self._decision_provider: DecisionProvider = _default_event_decision_provider \
             if decision_provider is None else decision_provider
         self._llm_provider: EventProposalProvider = EventLlmProvider() if llm_provider is None else llm_provider

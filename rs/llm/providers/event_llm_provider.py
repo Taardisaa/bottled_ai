@@ -110,6 +110,9 @@ class EventLlmProvider:
         gold = context.game_state.get("gold", "unknown")
         run_memory_summary = context.extras.get("run_memory_summary", "")
         recent_llm_decisions = context.extras.get("recent_llm_decisions", "none")
+        retrieved_episodic_memories = context.extras.get("retrieved_episodic_memories", "none")
+        retrieved_semantic_memories = context.extras.get("retrieved_semantic_memories", "none")
+        langmem_status = context.extras.get("langmem_status", "disabled_by_config")
 
         return PROMPT_TEMPLATE.format(
             handler_name=context.handler_name,
@@ -124,5 +127,8 @@ class EventLlmProvider:
             gold=gold,
             run_memory_summary=run_memory_summary,
             recent_llm_decisions=recent_llm_decisions,
+            retrieved_episodic_memories=retrieved_episodic_memories,
+            retrieved_semantic_memories=retrieved_semantic_memories,
+            langmem_status=langmem_status,
             extras=context.extras,
         )

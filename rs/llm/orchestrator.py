@@ -8,6 +8,7 @@ from typing import Dict
 from rs.llm.agents.base_agent import AgentContext, AgentDecision, BaseAgent
 from rs.llm.config import LlmConfig, load_llm_config
 from rs.llm.decision_memory import DecisionMemoryStore
+from rs.llm.langmem_service import LangMemService, get_langmem_service
 from rs.llm.telemetry import build_decision_telemetry, write_decision_telemetry
 from rs.llm.validator import validate_command
 
@@ -16,7 +17,12 @@ class AIPlayerAgent:
     """Registry and execution wrapper for handler-specific advisor agents.
     """
 
-    def __init__(self, config: LlmConfig | None = None, memory_store: DecisionMemoryStore | None = None):
+    def __init__(
+            self,
+            config: LlmConfig | None = None,
+            memory_store: DecisionMemoryStore | None = None,
+            langmem_service: LangMemService | None = None,
+    ):
         """Create orchestrator with optional LLM configuration.
 
         Args:
@@ -28,6 +34,7 @@ class AIPlayerAgent:
         self._agents_by_handler: Dict[str, BaseAgent] = {}
         self._config: LlmConfig = load_llm_config() if config is None else config
         self._memory_store = DecisionMemoryStore() if memory_store is None else memory_store
+        self._langmem_service = get_langmem_service(self._config) if langmem_service is None else langmem_service
 
     def register_agent(self, handler_name: str, agent: BaseAgent) -> None:
         """Register an advisor agent.
@@ -116,6 +123,7 @@ class AIPlayerAgent:
 
         if not should_return_none and decision is not None:
             self._memory_store.record(context, decision)
+            self._langmem_service.record_accepted_decision(context, decision)
 
         if self._config.telemetry_enabled and decision is not None and not should_return_none:
             latency_ms = int((time.perf_counter() - started_at) * 1000)
@@ -132,4 +140,7 @@ class AIPlayerAgent:
     def _build_memory_augmented_context(self, context: AgentContext) -> AgentContext:
         extras = dict(context.extras)
         extras["recent_llm_decisions"] = self._memory_store.build_recent_decisions_summary(context)
+        extras.setdefault("retrieved_episodic_memories", "none")
+        extras.setdefault("retrieved_semantic_memories", "none")
+        extras.setdefault("langmem_status", self._langmem_service.status())
         return replace(context, extras=extras)

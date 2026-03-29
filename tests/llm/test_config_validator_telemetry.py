@@ -37,6 +37,14 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                 "LLM_CONFIDENCE_THRESHOLD",
                 "LLM_TELEMETRY_ENABLED",
                 "LLM_TELEMETRY_PATH",
+                "LANGMEM_ENABLED",
+                "LANGMEM_SQLITE_PATH",
+                "LANGMEM_EMBEDDINGS_BASE_URL",
+                "LANGMEM_EMBEDDINGS_API_KEY",
+                "LANGMEM_EMBEDDINGS_MODEL",
+                "LANGMEM_TOP_K",
+                "LANGMEM_REFLECTION_BATCH_SIZE",
+                "LANGMEM_MAX_SEMANTIC_MEMORIES_PER_NAMESPACE",
             ]}
             try:
                 for key in previous:
@@ -56,6 +64,9 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
             self.assertEqual(0.55, config.confidence_threshold)
             self.assertFalse(config.telemetry_enabled)
             self.assertEqual("logs/custom.jsonl", config.telemetry_path)
+            self.assertFalse(config.langmem_enabled)
+            self.assertEqual("dataset/langmem/memory.sqlite3", config.langmem_sqlite_path)
+            self.assertEqual("bge-small-en-v1.5", config.langmem_embeddings_model)
 
     def test_load_llm_config_allows_env_overrides(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -78,6 +89,14 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                 "LLM_TIMEOUT_MS",
                 "LLM_MAX_RETRIES",
                 "LLM_CONFIDENCE_THRESHOLD",
+                "LANGMEM_ENABLED",
+                "LANGMEM_SQLITE_PATH",
+                "LANGMEM_EMBEDDINGS_BASE_URL",
+                "LANGMEM_EMBEDDINGS_API_KEY",
+                "LANGMEM_EMBEDDINGS_MODEL",
+                "LANGMEM_TOP_K",
+                "LANGMEM_REFLECTION_BATCH_SIZE",
+                "LANGMEM_MAX_SEMANTIC_MEMORIES_PER_NAMESPACE",
             ]}
 
             try:
@@ -86,6 +105,14 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
                 os.environ["LLM_TIMEOUT_MS"] = "2200"
                 os.environ["LLM_MAX_RETRIES"] = "4"
                 os.environ["LLM_CONFIDENCE_THRESHOLD"] = "0.77"
+                os.environ["LANGMEM_ENABLED"] = "true"
+                os.environ["LANGMEM_SQLITE_PATH"] = "dataset/test_langmem.sqlite3"
+                os.environ["LANGMEM_EMBEDDINGS_BASE_URL"] = "http://127.0.0.1:9000/v1"
+                os.environ["LANGMEM_EMBEDDINGS_API_KEY"] = "local-key"
+                os.environ["LANGMEM_EMBEDDINGS_MODEL"] = "bge-test"
+                os.environ["LANGMEM_TOP_K"] = "4"
+                os.environ["LANGMEM_REFLECTION_BATCH_SIZE"] = "6"
+                os.environ["LANGMEM_MAX_SEMANTIC_MEMORIES_PER_NAMESPACE"] = "12"
 
                 config = load_llm_config(str(config_path))
             finally:
@@ -100,6 +127,14 @@ class TestConfigValidatorTelemetry(unittest.TestCase):
             self.assertEqual(2200, config.timeout_ms)
             self.assertEqual(4, config.max_retries)
             self.assertEqual(0.77, config.confidence_threshold)
+            self.assertTrue(config.langmem_enabled)
+            self.assertEqual("dataset/test_langmem.sqlite3", config.langmem_sqlite_path)
+            self.assertEqual("http://127.0.0.1:9000/v1", config.langmem_embeddings_base_url)
+            self.assertEqual("local-key", config.langmem_embeddings_api_key)
+            self.assertEqual("bge-test", config.langmem_embeddings_model)
+            self.assertEqual(4, config.langmem_top_k)
+            self.assertEqual(6, config.langmem_reflection_batch_size)
+            self.assertEqual(12, config.langmem_max_semantic_memories_per_namespace)
 
     def test_validator_rejects_out_of_range_choose_index(self):
         context = AgentContext(

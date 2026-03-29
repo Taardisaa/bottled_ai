@@ -2,6 +2,7 @@ import unittest
 import time
 from typing import cast
 
+from rs.llm.langmem_service import LangMemService
 from rs.llm.agents.base_agent import AgentContext, AgentDecision, BaseAgent
 from rs.llm.config import LlmConfig
 from rs.llm.orchestrator import AIPlayerAgent
@@ -22,6 +23,17 @@ class ExplodingAgent(BaseAgent):
 
     def _decide(self, context):
         raise RuntimeError("boom")
+
+
+class FakeLangMemService:
+    def __init__(self):
+        self.recorded = []
+
+    def record_accepted_decision(self, context, decision):
+        self.recorded.append((context, decision))
+
+    def status(self):
+        return "ready"
 
 
 class TestBaseAgent(unittest.TestCase):
@@ -53,7 +65,10 @@ class TestBaseAgent(unittest.TestCase):
         self.assertEqual(1.0, decision.confidence)
 
     def test_orchestrator_returns_none_on_error(self):
-        orchestrator = AIPlayerAgent(config=LlmConfig(enabled=True, telemetry_enabled=False))
+        orchestrator = AIPlayerAgent(
+            config=LlmConfig(enabled=True, telemetry_enabled=False),
+            langmem_service=FakeLangMemService(),
+        )
         orchestrator.register_agent("EventHandler", ExplodingAgent())
         context = AgentContext(
             handler_name="EventHandler",
@@ -67,7 +82,10 @@ class TestBaseAgent(unittest.TestCase):
         self.assertIsNone(decision)
 
     def test_orchestrator_respects_global_enable_flag(self):
-        orchestrator = AIPlayerAgent(config=LlmConfig(enabled=False, telemetry_enabled=False))
+        orchestrator = AIPlayerAgent(
+            config=LlmConfig(enabled=False, telemetry_enabled=False),
+            langmem_service=FakeLangMemService(),
+        )
         orchestrator.register_agent("EventHandler", StubAgent({"proposed_command": "choose 0", "confidence": 1.0}))
         context = AgentContext(
             handler_name="EventHandler",
@@ -80,7 +98,8 @@ class TestBaseAgent(unittest.TestCase):
 
     def test_orchestrator_respects_enabled_handlers(self):
         orchestrator = AIPlayerAgent(
-            config=LlmConfig(enabled=True, enabled_handlers=["ShopPurchaseHandler"], telemetry_enabled=False)
+            config=LlmConfig(enabled=True, enabled_handlers=["ShopPurchaseHandler"], telemetry_enabled=False),
+            langmem_service=FakeLangMemService(),
         )
         orchestrator.register_agent("EventHandler", StubAgent({"proposed_command": "choose 0", "confidence": 1.0}))
         context = AgentContext(
@@ -94,7 +113,8 @@ class TestBaseAgent(unittest.TestCase):
 
     def test_orchestrator_returns_none_on_low_confidence(self):
         orchestrator = AIPlayerAgent(
-            config=LlmConfig(enabled=True, confidence_threshold=0.8, telemetry_enabled=False)
+            config=LlmConfig(enabled=True, confidence_threshold=0.8, telemetry_enabled=False),
+            langmem_service=FakeLangMemService(),
         )
         orchestrator.register_agent("EventHandler", StubAgent({"proposed_command": "choose 0", "confidence": 0.2}))
         context = AgentContext(
@@ -117,7 +137,8 @@ class TestBaseAgent(unittest.TestCase):
                 return {"proposed_command": "choose 0", "confidence": 1.0}
 
         orchestrator = AIPlayerAgent(
-            config=LlmConfig(enabled=True, timeout_ms=5, telemetry_enabled=False)
+            config=LlmConfig(enabled=True, timeout_ms=5, telemetry_enabled=False),
+            langmem_service=FakeLangMemService(),
         )
         orchestrator.register_agent("EventHandler", SlowAgent())
         context = AgentContext(
@@ -140,7 +161,8 @@ class TestBaseAgent(unittest.TestCase):
                 return {"proposed_command": "choose 0", "confidence": 1.0}
 
         orchestrator = AIPlayerAgent(
-            config=LlmConfig(enabled=True, timeout_ms=-1, telemetry_enabled=False)
+            config=LlmConfig(enabled=True, timeout_ms=-1, telemetry_enabled=False),
+            langmem_service=FakeLangMemService(),
         )
         orchestrator.register_agent("EventHandler", SlowButValidAgent())
         context = AgentContext(
@@ -177,7 +199,8 @@ class TestBaseAgent(unittest.TestCase):
 
         no_retry_agent = FlakyAgent()
         orchestrator_no_retry = AIPlayerAgent(
-            config=LlmConfig(enabled=True, max_retries=0, telemetry_enabled=False)
+            config=LlmConfig(enabled=True, max_retries=0, telemetry_enabled=False),
+            langmem_service=FakeLangMemService(),
         )
         orchestrator_no_retry.register_agent("EventHandler", no_retry_agent)
         decision_no_retry = orchestrator_no_retry.decide("EventHandler", context)
@@ -185,7 +208,8 @@ class TestBaseAgent(unittest.TestCase):
 
         one_retry_agent = FlakyAgent()
         orchestrator_one_retry = AIPlayerAgent(
-            config=LlmConfig(enabled=True, max_retries=1, telemetry_enabled=False)
+            config=LlmConfig(enabled=True, max_retries=1, telemetry_enabled=False),
+            langmem_service=FakeLangMemService(),
         )
         orchestrator_one_retry.register_agent("EventHandler", one_retry_agent)
         decision_one_retry = orchestrator_one_retry.decide("EventHandler", context)
@@ -205,7 +229,10 @@ class TestBaseAgent(unittest.TestCase):
                 return {"proposed_command": "choose 0", "confidence": 1.0}
 
         agent = MemoryAwareAgent()
-        orchestrator = AIPlayerAgent(config=LlmConfig(enabled=True, telemetry_enabled=False))
+        orchestrator = AIPlayerAgent(
+            config=LlmConfig(enabled=True, telemetry_enabled=False),
+            langmem_service=FakeLangMemService(),
+        )
         orchestrator.register_agent("EventHandler", agent)
         context = AgentContext(
             handler_name="EventHandler",
@@ -221,6 +248,26 @@ class TestBaseAgent(unittest.TestCase):
 
         self.assertEqual("none", agent.seen_summaries[0])
         self.assertIn("EventHandler -> choose 0", agent.seen_summaries[1])
+
+    def test_orchestrator_records_langmem_for_accepted_decisions(self):
+        langmem_service = FakeLangMemService()
+        orchestrator = AIPlayerAgent(
+            config=LlmConfig(enabled=True, telemetry_enabled=False),
+            langmem_service=langmem_service,
+        )
+        orchestrator.register_agent("EventHandler", StubAgent({"proposed_command": "choose 0", "confidence": 1.0}))
+        context = AgentContext(
+            handler_name="EventHandler",
+            screen_type="EVENT",
+            available_commands=["choose"],
+            choice_list=["a"],
+            extras={"run_id": "ironclad:seed1"},
+        )
+
+        decision = orchestrator.decide("EventHandler", context)
+
+        self.assertIsNotNone(decision)
+        self.assertEqual(1, len(langmem_service.recorded))
 
 
 if __name__ == "__main__":

@@ -112,6 +112,9 @@ class ShopPurchaseLlmProvider:
         potions_full = context.extras.get("potions_full", False)
         run_memory_summary = context.extras.get("run_memory_summary", "")
         recent_llm_decisions = context.extras.get("recent_llm_decisions", "none")
+        retrieved_episodic_memories = context.extras.get("retrieved_episodic_memories", "none")
+        retrieved_semantic_memories = context.extras.get("retrieved_semantic_memories", "none")
+        langmem_status = context.extras.get("langmem_status", "disabled_by_config")
         purge_cost = context.extras.get("purge_cost", "unknown")
         purge_available = context.extras.get("purge_available", False)
         offer_summaries = context.extras.get("offer_summaries", {})
@@ -135,6 +138,9 @@ class ShopPurchaseLlmProvider:
             deck_profile=json.dumps(deck_profile, sort_keys=True),
             run_memory_summary=run_memory_summary,
             recent_llm_decisions=recent_llm_decisions,
+            retrieved_episodic_memories=retrieved_episodic_memories,
+            retrieved_semantic_memories=retrieved_semantic_memories,
+            langmem_status=langmem_status,
             relic_names=json.dumps(relic_names, sort_keys=True),
             held_potion_names=json.dumps(held_potion_names, sort_keys=True),
             potions_full=potions_full,

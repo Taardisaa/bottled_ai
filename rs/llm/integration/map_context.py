@@ -5,6 +5,7 @@ from typing import Any
 from rs.game.map import Map
 from rs.game.path import PathHandlerConfig
 from rs.llm.agents.base_agent import AgentContext
+from rs.llm.run_context import get_current_strategy_name
 from rs.llm.state_summary_cache import get_cached_run_summary
 from rs.machine.state import GameState
 
@@ -116,6 +117,7 @@ def build_map_agent_context(
         },
         extras={
             "run_id": run_summary["run_id"],
+            "strategy_name": get_current_strategy_name(),
             "deck_profile": run_summary["deck_profile"],
             "relic_names": run_summary["relic_names"],
             "held_potion_names": run_summary["held_potion_names"],

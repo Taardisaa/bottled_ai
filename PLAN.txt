@@ -1,0 +1,10 @@
+
+0 = 'choose a colorless card to obtain'
+1 = 'enemies in your next three combats have 1 hp'
+2 = 'lose all gold obtain a random rare relic'
+3 = 'lose your starting relic obtain a random boss relic'
+
+CommonNeowHandler is not implemented
+
+_build_memory_augmented_context is too rough. this isn't how modern agent memory is built.
+

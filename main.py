@@ -6,6 +6,7 @@ from rs.ai import *
 from rs.helper.seed import make_random_seed
 from rs.api.client import Client
 from rs.helper.logger import log, init_log, log_new_run_sequence
+from rs.llm.langmem_service import get_langmem_service, shutdown_langmem_service
 from rs.machine.game import Game
 from rs.utils.llm_utils import run_llm_preflight_check
 
@@ -58,6 +59,7 @@ if __name__ == "__main__":
     init_log()
     log("Starting up")
     log(f"Selected strategy: {selected_strategy.name}")
+    log(f"LangMem status: {get_langmem_service().status()}")
     llm_preflight = run_llm_preflight_check()
     if llm_preflight.available:
         log(
@@ -97,3 +99,5 @@ if __name__ == "__main__":
     except Exception as e:
         log("Exception! " + str(e))
         log(traceback.format_exc())
+    finally:
+        shutdown_langmem_service(wait=True)
