@@ -33,11 +33,9 @@ class TestShopPurchaseLlmProviderPrompt(unittest.TestCase):
                 },
                 "run_memory_summary": "IRONCLAD on Act 1 Floor 10 at HP 57/85 with 223 gold.",
                 "recent_llm_decisions": "A1 F9 CardRewardHandler -> choose 1 (0.76, take scaling)",
-                "langmem_status": "embeddings_unavailable:request failed",
                 "current_priorities": ["remove strikes", "preserve gold"],
                 "risk_flags": [],
                 "deck_direction": "strength",
-                "run_hypotheses": ["maintain ShopPurchaseHandler consistency"],
                 "relic_names": ["Burning Blood", "Mummified Hand"],
                 "held_potion_names": ["gambler's brew", "elixir"],
                 "potions_full": False,
@@ -62,15 +60,17 @@ class TestShopPurchaseLlmProviderPrompt(unittest.TestCase):
 
         self.assertIn("answer in short plain text using these fields", prompt)
         self.assertIn('choose <index>', prompt)
-        self.assertIn('Available protocol commands:', prompt)
         self.assertIn('- 0 | option="purge"', prompt)
         self.assertIn("Class: IRONCLAD, Ascension: 3, Act boss: The Guardian", prompt)
         self.assertIn("Run memory summary: IRONCLAD on Act 1 Floor 10 at HP 57/85 with 223 gold.", prompt)
         self.assertIn("Recent LLM decisions: A1 F9 CardRewardHandler -> choose 1 (0.76, take scaling)", prompt)
-        self.assertIn("LangMem status: unavailable", prompt)
-        self.assertNotIn("request failed", prompt)
+        self.assertNotIn("LangMem status:", prompt)
+        self.assertNotIn("Handler:", prompt)
+        self.assertNotIn("Screen:", prompt)
+        self.assertNotIn("Run hypotheses:", prompt)
         self.assertIn("Deck profile:", prompt)
         self.assertIn('"ATTACK": 7', prompt)
+        self.assertNotIn('"cost_buckets"', prompt)
         self.assertIn('Current relics: ["Burning Blood", "Mummified Hand"]', prompt)
         self.assertIn('Held potions: ["gambler\'s brew", "elixir"]', prompt)
         self.assertIn("Purge available: True", prompt)

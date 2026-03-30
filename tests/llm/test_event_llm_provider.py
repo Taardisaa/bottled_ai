@@ -80,14 +80,9 @@ class TestEventLlmProvider(unittest.TestCase):
                 "recent_llm_decisions": "choose 0 at prior event",
                 "retrieved_episodic_memories": "none",
                 "retrieved_semantic_memories": "none",
-                "langmem_status": (
-                    "embeddings_unavailable:Could not import transformers python package. "
-                    "Please install it."
-                ),
                 "current_priorities": ["avoid_bad_event_traps"],
                 "risk_flags": [],
                 "deck_direction": "unknown",
-                "run_hypotheses": ["maintain EventHandler consistency"],
             }
         )
 
@@ -95,11 +90,11 @@ class TestEventLlmProvider(unittest.TestCase):
 
         self.assertIn('choose <index>', prompt)
         self.assertIn('answer in short plain text using these fields', prompt)
-        self.assertIn('Available protocol commands:', prompt)
         self.assertIn('- 0 | enabled | label="Obtain a random rare Card"', prompt)
         self.assertIn('text="[ Obtain a random rare Card ]"', prompt)
-        self.assertIn('LangMem status: unavailable', prompt)
-        self.assertNotIn('transformers python package', prompt)
+        self.assertNotIn('LangMem status:', prompt)
+        self.assertNotIn('Handler:', prompt)
+        self.assertNotIn('Screen:', prompt)
         self.assertNotIn('Extras:', prompt)
         self.assertNotIn('Return ONLY a JSON object', prompt)
 
@@ -117,6 +112,24 @@ class TestEventLlmProvider(unittest.TestCase):
 
         self.assertIn('- 0 | enabled | choice="heal"', prompt)
         self.assertIn('- 1 | enabled | choice="leave"', prompt)
+
+    def test_build_prompt_omits_empty_memory_lines(self):
+        context = AgentContext(
+            handler_name="EventHandler",
+            screen_type="EVENT",
+            available_commands=["choose", "wait", "state"],
+            choice_list=["heal"],
+            game_state={"event_name": "Test Event", "event_options": []},
+            extras={
+                "retrieved_episodic_memories": "none",
+                "retrieved_semantic_memories": "",
+            },
+        )
+
+        prompt = EventLlmProvider(model="gpt-5-mini")._build_prompt(context)
+
+        self.assertNotIn("Retrieved episodic memories:", prompt)
+        self.assertNotIn("Retrieved semantic memories:", prompt)
 
 
 if __name__ == "__main__":

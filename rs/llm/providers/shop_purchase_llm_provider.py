@@ -100,41 +100,39 @@ class ShopPurchaseLlmProvider:
         gold = context.game_state.get("gold", "unknown")
         current_hp = context.game_state.get("current_hp", "unknown")
         max_hp = context.game_state.get("max_hp", "unknown")
-        room_type = context.game_state.get("room_type", "unknown")
         character_class = context.game_state.get("character_class", "unknown")
         ascension_level = context.game_state.get("ascension_level", "unknown")
         act_boss = context.game_state.get("act_boss", "unknown")
         removable_curse = context.extras.get("has_removable_curse", False)
         deck_size = context.extras.get("deck_size", "unknown")
-        deck_profile = context.extras.get("deck_profile", {})
+        deck_profile = self._compact_deck_profile(context.extras.get("deck_profile", {}))
         relic_names = context.extras.get("relic_names", [])
-        held_potion_names = context.extras.get("held_potion_names", [])
-        potions_full = context.extras.get("potions_full", False)
         run_memory_summary = context.extras.get("run_memory_summary", "")
         recent_llm_decisions = context.extras.get("recent_llm_decisions", "none")
-        retrieved_episodic_memories = context.extras.get("retrieved_episodic_memories", "none")
-        retrieved_semantic_memories = context.extras.get("retrieved_semantic_memories", "none")
-        langmem_status = self._normalize_langmem_status(context.extras.get("langmem_status", "disabled_by_config"))
+        memory_context_block = self._build_memory_context_block(
+            context.extras.get("retrieved_episodic_memories", "none"),
+            context.extras.get("retrieved_semantic_memories", "none"),
+        )
         purge_cost = context.extras.get("purge_cost", "unknown")
         purge_available = context.extras.get("purge_available", False)
         offer_summaries = context.extras.get("offer_summaries", {})
         current_priorities = self._format_list_field(context.extras.get("current_priorities"), default="none")
         risk_flags = self._format_list_field(context.extras.get("risk_flags"), default="stable")
         deck_direction = str(context.extras.get("deck_direction", "unknown") or "unknown")
-        run_hypotheses = self._format_list_field(context.extras.get("run_hypotheses"), default="none")
         shop_options_text = self._format_choice_list(context.choice_list)
+        potion_context_lines = self._build_potion_context_lines(
+            offer_summaries.get("potions", []),
+            context.extras.get("held_potion_names", []),
+            context.extras.get("potions_full", False),
+        )
 
         return PROMPT_TEMPLATE.format(
-            handler_name=context.handler_name,
-            screen_type=context.screen_type,
-            available_commands=context.available_commands,
             shop_options_text=shop_options_text,
             floor=floor,
             act=act,
             gold=gold,
             current_hp=current_hp,
             max_hp=max_hp,
-            room_type=room_type,
             character_class=character_class,
             ascension_level=ascension_level,
             act_boss=act_boss,
@@ -143,16 +141,12 @@ class ShopPurchaseLlmProvider:
             deck_profile=json.dumps(deck_profile, sort_keys=True),
             run_memory_summary=run_memory_summary,
             recent_llm_decisions=recent_llm_decisions,
-            retrieved_episodic_memories=retrieved_episodic_memories,
-            retrieved_semantic_memories=retrieved_semantic_memories,
-            langmem_status=langmem_status,
+            memory_context_block=memory_context_block,
             current_priorities=current_priorities,
             risk_flags=risk_flags,
             deck_direction=deck_direction,
-            run_hypotheses=run_hypotheses,
             relic_names=json.dumps(relic_names, sort_keys=True),
-            held_potion_names=json.dumps(held_potion_names, sort_keys=True),
-            potions_full=potions_full,
+            potion_context_lines=potion_context_lines,
             purge_cost=purge_cost,
             purge_available=purge_available,
             shop_card_offers=json.dumps(offer_summaries.get("cards", []), sort_keys=True),
@@ -165,17 +159,38 @@ class ShopPurchaseLlmProvider:
             return "- none"
         return "\n".join(f"- {index} | option=\"{str(choice).strip()}\"" for index, choice in enumerate(choice_list))
 
-    def _normalize_langmem_status(self, status: Any) -> str:
-        status_text = str(status or "").strip().lower()
-        if status_text == "" or status_text == "disabled_by_config":
-            return "disabled"
-        if "unavailable" in status_text or "error" in status_text or "failed" in status_text:
-            return "unavailable"
-        return "ready"
-
     def _format_list_field(self, value: Any, default: str) -> str:
         if isinstance(value, list):
             normalized_values = [str(item).strip() for item in value if str(item).strip()]
             return ", ".join(normalized_values) if normalized_values else default
         value_text = str(value or "").strip()
         return value_text if value_text else default
+
+    def _compact_deck_profile(self, deck_profile: Any) -> dict[str, Any]:
+        if not isinstance(deck_profile, dict):
+            return {}
+        compacted: dict[str, Any] = {}
+        for key in ("total_cards", "type_counts", "upgraded_cards", "exhaust_cards"):
+            if key in deck_profile:
+                compacted[key] = deck_profile[key]
+        return compacted
+
+    def _build_memory_context_block(self, episodic: Any, semantic: Any) -> str:
+        lines: list[str] = []
+        for label, value in (
+            ("Retrieved episodic memories", episodic),
+            ("Retrieved semantic memories", semantic),
+        ):
+            value_text = str(value or "").strip()
+            if value_text == "" or value_text.lower() == "none":
+                continue
+            lines.append(f"{label}: {value_text}")
+        return "\n".join(lines)
+
+    def _build_potion_context_lines(self, potion_offers: Any, held_potion_names: Any, potions_full: Any) -> str:
+        if not isinstance(potion_offers, list) or not potion_offers:
+            return ""
+        return (
+            f"Held potions: {json.dumps(held_potion_names or [], sort_keys=True)}\n"
+            f"Potion slots full: {bool(potions_full)}\n"
+        )

@@ -94,10 +94,11 @@ class BattleMetaLlmProvider:
         )
 
     def _build_prompt(self, context: AgentContext) -> str:
+        memory_context_block = self._build_memory_context_block(
+            context.extras.get("retrieved_episodic_memories", "none"),
+            context.extras.get("retrieved_semantic_memories", "none"),
+        )
         return PROMPT_TEMPLATE.format(
-            handler_name=context.handler_name,
-            screen_type=context.screen_type,
-            available_commands=context.available_commands,
             floor=context.game_state.get("floor", "unknown"),
             act=context.game_state.get("act", "unknown"),
             room_type=context.game_state.get("room_type", "unknown"),
@@ -105,20 +106,37 @@ class BattleMetaLlmProvider:
             ascension_level=context.game_state.get("ascension_level", "unknown"),
             current_hp=context.game_state.get("current_hp", "unknown"),
             max_hp=context.game_state.get("max_hp", "unknown"),
-            gold=context.game_state.get("gold", "unknown"),
             turn=context.game_state.get("turn", "unknown"),
             player_block=context.game_state.get("player_block", "unknown"),
             player_energy=context.game_state.get("player_energy", "unknown"),
             run_memory_summary=context.extras.get("run_memory_summary", ""),
             recent_llm_decisions=context.extras.get("recent_llm_decisions", "none"),
-            retrieved_episodic_memories=context.extras.get("retrieved_episodic_memories", "none"),
-            retrieved_semantic_memories=context.extras.get("retrieved_semantic_memories", "none"),
-            langmem_status=context.extras.get("langmem_status", "disabled_by_config"),
+            memory_context_block=memory_context_block,
             deterministic_profile=context.extras.get("deterministic_profile", "unknown"),
             available_profiles=json.dumps(context.extras.get("available_profiles", []), sort_keys=True),
             monster_summaries=json.dumps(context.extras.get("monster_summaries", []), sort_keys=True),
             player_power_summaries=json.dumps(context.extras.get("player_power_summaries", []), sort_keys=True),
             relic_names=json.dumps(context.extras.get("relic_names", []), sort_keys=True),
-            held_potion_names=json.dumps(context.extras.get("held_potion_names", []), sort_keys=True),
-            deck_profile=json.dumps(context.extras.get("deck_profile", {}), sort_keys=True),
+            deck_profile=json.dumps(self._compact_deck_profile(context.extras.get("deck_profile", {})), sort_keys=True),
         )
+
+    def _build_memory_context_block(self, episodic: Any, semantic: Any) -> str:
+        lines: list[str] = []
+        for label, value in (
+            ("Retrieved episodic memories", episodic),
+            ("Retrieved semantic memories", semantic),
+        ):
+            value_text = str(value or "").strip()
+            if value_text == "" or value_text.lower() == "none":
+                continue
+            lines.append(f"- {label}: {value_text}")
+        return "\n".join(lines)
+
+    def _compact_deck_profile(self, deck_profile: Any) -> dict[str, Any]:
+        if not isinstance(deck_profile, dict):
+            return {}
+        compacted: dict[str, Any] = {}
+        for key in ("total_cards", "type_counts", "upgraded_cards", "exhaust_cards"):
+            if key in deck_profile:
+                compacted[key] = deck_profile[key]
+        return compacted

@@ -11,19 +11,13 @@ Rules:
 - Prefer safe conservative choices when uncertain.
 - If uncertain, set proposed_command to null and low confidence.
 
-Handler: {handler_name}
-Screen: {screen_type}
-Available protocol commands: {available_commands}
 Event options:
 {event_options_text}
 Event: {event_name}
 Floor: {floor}, Act: {act}, HP: {current_hp}/{max_hp}, Gold: {gold}
 Run memory summary: {run_memory_summary}
 Recent LLM decisions: {recent_llm_decisions}
-LangMem status: {langmem_status}
-Retrieved episodic memories: {retrieved_episodic_memories}
-Retrieved semantic memories: {retrieved_semantic_memories}
+{memory_context_block}
 Current priorities: {current_priorities}
 Risk flags: {risk_flags}
 Deck direction: {deck_direction}
-Run hypotheses: {run_hypotheses}

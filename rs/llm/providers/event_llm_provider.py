@@ -110,22 +110,19 @@ class EventLlmProvider:
         gold = context.game_state.get("gold", "unknown")
         run_memory_summary = context.extras.get("run_memory_summary", "")
         recent_llm_decisions = context.extras.get("recent_llm_decisions", "none")
-        retrieved_episodic_memories = context.extras.get("retrieved_episodic_memories", "none")
-        retrieved_semantic_memories = context.extras.get("retrieved_semantic_memories", "none")
-        langmem_status = self._normalize_langmem_status(context.extras.get("langmem_status", "disabled_by_config"))
+        memory_context_block = self._build_memory_context_block(
+            context.extras.get("retrieved_episodic_memories", "none"),
+            context.extras.get("retrieved_semantic_memories", "none"),
+        )
         current_priorities = self._format_list_field(context.extras.get("current_priorities"), default="none")
         risk_flags = self._format_list_field(context.extras.get("risk_flags"), default="stable")
         deck_direction = str(context.extras.get("deck_direction", "unknown") or "unknown")
-        run_hypotheses = self._format_list_field(context.extras.get("run_hypotheses"), default="none")
         event_options_text = self._format_event_options(
             context.game_state.get("event_options"),
             context.choice_list,
         )
 
         return PROMPT_TEMPLATE.format(
-            handler_name=context.handler_name,
-            screen_type=context.screen_type,
-            available_commands=context.available_commands,
             event_options_text=event_options_text,
             event_name=event_name,
             floor=floor,
@@ -135,13 +132,10 @@ class EventLlmProvider:
             gold=gold,
             run_memory_summary=run_memory_summary,
             recent_llm_decisions=recent_llm_decisions,
-            retrieved_episodic_memories=retrieved_episodic_memories,
-            retrieved_semantic_memories=retrieved_semantic_memories,
-            langmem_status=langmem_status,
+            memory_context_block=memory_context_block,
             current_priorities=current_priorities,
             risk_flags=risk_flags,
             deck_direction=deck_direction,
-            run_hypotheses=run_hypotheses,
         )
 
     def _format_event_options(self, event_options: Any, choice_list: list[str]) -> str:
@@ -165,17 +159,21 @@ class EventLlmProvider:
             return "\n".join(f"- {index} | enabled | choice=\"{choice}\"" for index, choice in enumerate(choice_list))
         return "- none"
 
-    def _normalize_langmem_status(self, status: Any) -> str:
-        status_text = str(status or "").strip().lower()
-        if status_text == "" or status_text == "disabled_by_config":
-            return "disabled"
-        if "unavailable" in status_text or "error" in status_text or "failed" in status_text:
-            return "unavailable"
-        return "ready"
-
     def _format_list_field(self, value: Any, default: str) -> str:
         if isinstance(value, list):
             normalized_values = [str(item).strip() for item in value if str(item).strip()]
             return ", ".join(normalized_values) if normalized_values else default
         value_text = str(value or "").strip()
         return value_text if value_text else default
+
+    def _build_memory_context_block(self, episodic: Any, semantic: Any) -> str:
+        lines: list[str] = []
+        for label, value in (
+            ("Retrieved episodic memories", episodic),
+            ("Retrieved semantic memories", semantic),
+        ):
+            value_text = str(value or "").strip()
+            if value_text == "" or value_text.lower() == "none":
+                continue
+            lines.append(f"{label}: {value_text}")
+        return "\n".join(lines)

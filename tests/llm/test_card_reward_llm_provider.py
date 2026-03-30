@@ -26,8 +26,6 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
             extras={
                 "deck_size": 15,
                 "relic_names": ["Vajra"],
-                "held_potion_names": ["strength potion"],
-                "potions_full": False,
                 "deck_card_name_counts": {"strike": 4, "defend": 4, "pommel strike": 1},
                 "deck_card_entries": [
                     {"name": "pommel strike+1", "upgrade_times": 1, "count": 1},
@@ -41,11 +39,9 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
                 },
                 "run_memory_summary": "IRONCLAD on Act 1 Floor 10 at HP 50/80 with 99 gold.",
                 "recent_llm_decisions": "A1 F9 EventHandler -> choose 0 (0.88, safe heal)",
-                "langmem_status": "embeddings_unavailable:missing model",
                 "current_priorities": ["find scaling"],
                 "risk_flags": [],
                 "deck_direction": "attack",
-                "run_hypotheses": ["maintain CardRewardHandler consistency"],
                 "choice_card_summaries": [
                     {"index": 0, "name": "pommel strike", "type": "ATTACK", "rarity": "COMMON", "cost": 1},
                     {"index": 1, "name": "cleave", "type": "ATTACK", "rarity": "COMMON", "cost": 1},
@@ -68,17 +64,21 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
 
         self.assertIn("answer in short plain text using these fields", prompt)
         self.assertIn('choose <index>', prompt)
-        self.assertIn('Available protocol commands:', prompt)
         self.assertIn('- 0 | card="pommel strike"', prompt)
-        self.assertIn("Card DB status: available", prompt)
         self.assertIn("Choice card details (stsdb):", prompt)
         self.assertIn("Class: IRONCLAD, Ascension: 5, Act boss: Hexaghost", prompt)
         self.assertIn("Run memory summary: IRONCLAD on Act 1 Floor 10 at HP 50/80 with 99 gold.", prompt)
         self.assertIn("Recent LLM decisions: A1 F9 EventHandler -> choose 0 (0.88, safe heal)", prompt)
-        self.assertIn("LangMem status: unavailable", prompt)
-        self.assertNotIn("missing model", prompt)
+        self.assertNotIn("LangMem status:", prompt)
+        self.assertNotIn("Handler:", prompt)
+        self.assertNotIn("Screen:", prompt)
+        self.assertNotIn("Room type:", prompt)
+        self.assertNotIn("Held potions:", prompt)
+        self.assertNotIn("Potion slots full:", prompt)
+        self.assertNotIn("Run hypotheses:", prompt)
         self.assertIn("Deck profile:", prompt)
         self.assertIn('"upgraded_cards": 2', prompt)
+        self.assertNotIn('"cost_buckets"', prompt)
         self.assertIn("Choice card summaries:", prompt)
         self.assertIn('"name": "pommel strike"', prompt)
         self.assertIn('Reward screen flags: {"bowl_available": true, "skip_available": true}', prompt)
@@ -128,6 +128,40 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
         self.assertIn(("searing blow", 4), calls)
         self.assertIn(("searing blow", 7), calls)
         self.assertIn(("cleave", 0), calls)
+
+    def test_card_detail_rows_are_compacted(self):
+        context = AgentContext(
+            handler_name="CardRewardHandler",
+            screen_type="CARD_REWARD",
+            available_commands=["choose", "skip"],
+            choice_list=["Bash"],
+            game_state={},
+            extras={"deck_card_entries": []},
+        )
+
+        with patch(
+            "rs.llm.providers.card_reward_llm_provider.query_card",
+            return_value={
+                "name": "bash",
+                "type": "ATTACK",
+                "rarity": "BASIC",
+                "cost": 2,
+                "description": "Deal damage",
+                "foo": "bar",
+            },
+        ):
+            rows = CardRewardLlmProvider(model="gpt-5-mini")._build_card_details(context)
+
+        self.assertEqual(
+            {
+                "name": "bash",
+                "type": "ATTACK",
+                "rarity": "BASIC",
+                "cost": 2,
+                "description": "Deal damage",
+            },
+            rows["choice"][0]["info"],
+        )
 
 if __name__ == "__main__":
     unittest.main()

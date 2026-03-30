@@ -11,30 +11,21 @@ Rules:
 - Ignore protocol-only commands like key, click, state, and bare wait unless the prompt explicitly requires them.
 - If uncertain, set proposed_command to null and low confidence.
 
-Handler: {handler_name}
-Screen: {screen_type}
-Available protocol commands: {available_commands}
 Shop options:
 {shop_options_text}
 Floor: {floor}, Act: {act}, Gold: {gold}, HP: {current_hp}/{max_hp}
-Room type: {room_type}
 Class: {character_class}, Ascension: {ascension_level}, Act boss: {act_boss}
 Run memory summary: {run_memory_summary}
 Recent LLM decisions: {recent_llm_decisions}
-LangMem status: {langmem_status}
-Retrieved episodic memories: {retrieved_episodic_memories}
-Retrieved semantic memories: {retrieved_semantic_memories}
+{memory_context_block}
 Current priorities: {current_priorities}
 Risk flags: {risk_flags}
 Deck direction: {deck_direction}
-Run hypotheses: {run_hypotheses}
 Has removable curse: {has_removable_curse}
 Deck size: {deck_size}
 Deck profile: {deck_profile}
 Current relics: {relic_names}
-Held potions: {held_potion_names}
-Potion slots full: {potions_full}
-Purge available: {purge_available}
+{potion_context_lines}Purge available: {purge_available}
 Purge cost: {purge_cost}
 Shop card offers: {shop_card_offers}
 Shop relic offers: {shop_relic_offers}
