@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from rs.llm.ai_player_graph import AIPlayerGraph
+from rs.llm.battle_runtime import BattleSessionResult
 from rs.llm.config import LlmConfig
 from test_helpers.resources import load_resource_state
 
@@ -12,6 +13,7 @@ from test_helpers.resources import load_resource_state
 class FakeLangMemService:
     def __init__(self):
         self.recorded = []
+        self.custom_memories = []
 
     def build_context_memory(self, context):
         return {
@@ -25,6 +27,41 @@ class FakeLangMemService:
 
     def status(self):
         return "ready"
+
+    def record_custom_memory(self, context, content, tags=(), reflect=False):
+        self.custom_memories.append((context, content, tags, reflect))
+
+
+class FakeBattleRuntime:
+    def __init__(self, initial_state, next_state):
+        self._current_state = initial_state
+        self._next_state = next_state
+        self.commands = []
+
+    def current_state(self):
+        return self._current_state
+
+    def execute(self, commands):
+        self.commands.append(list(commands))
+        self._current_state = self._next_state
+        return self._current_state
+
+
+class FakeBattleSubagent:
+    def __init__(self):
+        self.calls = []
+
+    def run(self, state, runtime):
+        self.calls.append(state)
+        final_state = runtime.execute(["end"])
+        return BattleSessionResult(
+            handled=True,
+            final_state=final_state,
+            session_id="fake-session",
+            executed_commands=[["end"]],
+            steps=1,
+            summary="fake battle",
+        )
 
 
 class StaticProposalProvider:
@@ -102,7 +139,8 @@ class TestAIPlayerGraph(unittest.TestCase):
 
         self.assertIsNone(graph.decide(state))
 
-    def test_battle_state_is_not_handled_by_unified_graph(self):
+    def test_battle_state_is_routed_to_battle_subagent(self):
+        battle_subagent = FakeBattleSubagent()
         graph = AIPlayerGraph(
             config=LlmConfig(
                 enabled=True,
@@ -111,12 +149,23 @@ class TestAIPlayerGraph(unittest.TestCase):
                 graph_trace_enabled=False,
             ),
             langmem_service=FakeLangMemService(),
+            battle_subagent=battle_subagent,
         )
 
         state = load_resource_state("battles/general/battle_simple_state.json")
+        next_state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeBattleRuntime(state, next_state)
 
-        self.assertFalse(graph.can_handle(state))
+        self.assertTrue(graph.can_handle(state))
         self.assertIsNone(graph.decide(state))
+
+        result = graph.execute(state, runtime=runtime)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual(next_state.screen_type(), result.final_state.screen_type())
+        self.assertEqual([["end"]], runtime.commands)
+        self.assertEqual(1, len(battle_subagent.calls))
 
     def test_single_choice_choose_state_is_not_handled_by_unified_graph(self):
         graph = AIPlayerGraph(

@@ -33,6 +33,23 @@ DEFAULT_GAME_HANDLERS = [
 ]
 
 
+class _GameBattleRuntimeAdapter:
+    def __init__(self, game: "Game"):
+        self._game = game
+
+    def current_state(self) -> GameState:
+        if self._game.last_state is None:
+            raise ValueError("battle runtime requested state before the game produced one")
+        return self._game.last_state
+
+    def execute(self, commands: list[str]) -> GameState:
+        for command in commands:
+            self._game._execute_runtime_command(command)
+        if self._game.last_state is None:
+            raise ValueError("battle runtime executed commands but produced no state")
+        return self._game.last_state
+
+
 class Game:
 
     def __init__(self, client: Client, character: Character):
@@ -104,6 +121,9 @@ class Game:
     def __send_setup_command(self, command: str):
         self.last_state = GameState(json.loads(self.client.send_message(command, before_run=True)))
 
+    def _execute_runtime_command(self, command: str):
+        self.__send_command(command)
+
     def __handle_state_based_logging(self):
         monsters = self.last_state.get_monsters()
         if self.last_state.game_state()['room_type'] == 'MonsterRoomElite':
@@ -163,4 +183,9 @@ class Game:
             return None
 
         log_to_run("Handler: AIPlayerGraph")
-        return ai_player_graph.decide(self.last_state)
+        result = ai_player_graph.execute(self.last_state, runtime=_GameBattleRuntimeAdapter(self))
+        if result is None or not result.handled:
+            return None
+        if result.final_state is not None:
+            self.last_state = result.final_state
+        return result.commands

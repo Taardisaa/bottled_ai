@@ -340,6 +340,38 @@ class LangMemService:
             self._reflection_buffers[run_id].clear()
             self._executor.submit(self._reflect_batch, context, batch, "decision_batch")
 
+    def record_custom_memory(
+            self,
+            context: AgentContext,
+            content: str,
+            *,
+            tags: tuple[str, ...] = (),
+            reflect: bool = False,
+    ) -> None:
+        if not self.is_ready():
+            return
+
+        normalized_content = str(content).strip()
+        if normalized_content == "":
+            return
+
+        now = _utc_now()
+        record = MemoryRecord(
+            memory_id=uuid.uuid4().hex,
+            namespace=self._run_namespace(context),
+            memory_type="episodic",
+            content=normalized_content,
+            source_run_id=self._resolve_run_id(context),
+            handler_name=context.handler_name,
+            created_at_utc=now,
+            updated_at_utc=now,
+            tags=("custom_memory", context.handler_name, *tags),
+        )
+        self._store_record(record)
+
+        if reflect:
+            self._executor.submit(self._reflect_batch, context, [normalized_content], "custom_memory")
+
     def finalize_run(self, context: AgentContext, payload: dict[str, Any]) -> None:
         if not self.is_ready():
             return

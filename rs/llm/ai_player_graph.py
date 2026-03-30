@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 import time
 from typing import Any, Dict, Literal, TypedDict, cast
 
@@ -10,9 +10,19 @@ from langgraph.graph import END, START, StateGraph
 
 from rs.game.path import PathHandlerConfig
 from rs.game.screen_type import ScreenType
+from rs.llm.battle_runtime import BattleRuntimeAdapter, BattleSessionResult
+from rs.llm.battle_subagent import BattleSubagent
+from rs.llm.battle_tools import (
+    AnalyzeWithCalculatorTool,
+    EnumerateLegalActionsTool,
+    ExecuteBattleCommandTool,
+    RetrieveBattleExperienceTool,
+    ValidateBattleCommandTool,
+)
 from rs.llm.agents.base_agent import AgentContext, AgentDecision
 from rs.llm.config import LlmConfig, load_llm_config
 from rs.llm.graph_trace import build_graph_trace_record, mirror_graph_trace_to_run_log, write_graph_trace
+from rs.llm.integration.battle_context import build_battle_agent_context, is_battle_scope_state
 from rs.llm.langmem_service import LangMemService, get_langmem_service
 from rs.llm.providers.card_reward_llm_provider import CardRewardLlmProvider
 from rs.llm.providers.event_llm_provider import EventLlmProvider
@@ -35,6 +45,14 @@ GraphRoute = Literal[
     "decide_map",
     "decide_fallback",
 ]
+
+
+@dataclass
+class GraphExecutionResult:
+    handled: bool
+    commands: list[str] | None = None
+    final_state: GameState | None = None
+    battle_session: BattleSessionResult | None = None
 
 
 class AIPlayerGraphState(TypedDict, total=False):
@@ -68,6 +86,7 @@ class AIPlayerGraph:
             self,
             config: LlmConfig | None = None,
             langmem_service: LangMemService | None = None,
+            battle_subagent: BattleSubagent | None = None,
     ):
         self._config = load_llm_config() if config is None else config
         self._langmem_service = get_langmem_service(self._config) if langmem_service is None else langmem_service
@@ -78,12 +97,19 @@ class AIPlayerGraph:
         self._shop_provider = ShopPurchaseLlmProvider()
         self._card_reward_provider = CardRewardLlmProvider()
         self._map_provider = MapLlmProvider()
+        self._battle_subagent = BattleSubagent(langmem_service=self._langmem_service) if battle_subagent is None else battle_subagent
+        if battle_subagent is None:
+            self._battle_subagent.register_tool(EnumerateLegalActionsTool())
+            self._battle_subagent.register_tool(AnalyzeWithCalculatorTool())
+            self._battle_subagent.register_tool(ValidateBattleCommandTool())
+            self._battle_subagent.register_tool(ExecuteBattleCommandTool())
+            self._battle_subagent.register_tool(RetrieveBattleExperienceTool(self._langmem_service))
 
     def is_enabled(self) -> bool:
         return self._config.enabled and self._config.ai_player_graph_enabled
 
     def can_handle(self, state: GameState) -> bool:
-        if state.has_command(Command.CHOOSE) and len(state.get_choice_list()) <= 1:
+        if self._is_single_choice_non_battle_bypass(state):
             return False
         return self._build_context(state) is not None
 
@@ -92,7 +118,7 @@ class AIPlayerGraph:
             self._trace_raw_event(event_type="graph_disabled", summary="ai player graph disabled by config")
             return None
 
-        if state.has_command(Command.CHOOSE) and len(state.get_choice_list()) <= 1:
+        if self._is_single_choice_non_battle_bypass(state):
             self._trace_raw_event(
                 event_type="graph_unhandled_state",
                 screen_type=state.screen_type(),
@@ -106,6 +132,14 @@ class AIPlayerGraph:
                 event_type="graph_unhandled_state",
                 screen_type=state.screen_type(),
                 summary="state not handled by ai player graph",
+            )
+            return None
+
+        if context.handler_name == "BattleHandler":
+            self._trace_context_event(
+                context,
+                event_type="graph_unhandled_state",
+                summary="battle handler requires runtime-aware execute() path",
             )
             return None
 
@@ -223,6 +257,45 @@ class AIPlayerGraph:
             metadata={"commands": [str(command) for command in commands]},
         )
         return [str(command) for command in commands]
+
+    def execute(
+            self,
+            state: GameState,
+            runtime: BattleRuntimeAdapter | None = None,
+    ) -> GraphExecutionResult | None:
+        if not self.is_enabled():
+            return None
+
+        if self._is_single_choice_non_battle_bypass(state):
+            return None
+
+        context = self._build_context(state)
+        if context is None:
+            return None
+        if not self._config.is_handler_enabled(context.handler_name):
+            return None
+
+        if context.handler_name != "BattleHandler":
+            commands = self.decide(state)
+            if commands is None:
+                return None
+            return GraphExecutionResult(handled=True, commands=commands, final_state=state)
+
+        if runtime is None:
+            self._trace_context_event(
+                context,
+                event_type="graph_unhandled_state",
+                summary="battle handler was selected but no runtime adapter was provided",
+            )
+            return None
+
+        session_result = self._battle_subagent.run(state, runtime)
+        return GraphExecutionResult(
+            handled=session_result.handled,
+            commands=None,
+            final_state=session_result.final_state,
+            battle_session=session_result,
+        )
 
     def get_compiled_graph(self) -> Any:
         if self._compiled_graph is None:
@@ -444,7 +517,17 @@ class AIPlayerGraph:
             metadata=merged_metadata,
         )
 
+    def _is_single_choice_non_battle_bypass(self, state: GameState) -> bool:
+        return (
+            not is_battle_scope_state(state)
+            and state.has_command(Command.CHOOSE)
+            and len(state.get_choice_list()) <= 1
+        )
+
     def _build_context(self, state: GameState) -> AgentContext | None:
+        if is_battle_scope_state(state):
+            return build_battle_agent_context(state, "BattleHandler")
+
         if state.screen_type() == ScreenType.EVENT.value and state.has_command(Command.CHOOSE):
             return build_event_agent_context(state, "EventHandler")
 
