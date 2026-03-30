@@ -1,20 +1,14 @@
 from typing import Any, Dict, List, Tuple
 
-from rs.calculator.interfaces.memory_items import MemoryItem
 from rs.game.deck import Deck
 from rs.game.event import Event
 from rs.machine.command import Command
 from rs.machine.orb import Orb
-from rs.machine.the_bots_memory_book import TheBotsMemoryBook
 
 
 class GameState:
-    def __init__(self, 
-            json_state: Dict[str, Any], 
-            the_bots_memory_book: TheBotsMemoryBook
-        ):
-        """Initialize game state wrappers and synchronize bot memory snapshots."""
-        self.the_bots_memory_book: TheBotsMemoryBook = the_bots_memory_book
+    def __init__(self, json_state: Dict[str, Any]):
+        """Initialize game state wrappers from the raw protocol JSON."""
         self.json: Dict[str, Any] = json_state
         if "game_state" in json_state:
             if "combat_state" in json_state["game_state"]:
@@ -23,17 +17,7 @@ class GameState:
                 self.discard_pile: Deck = Deck(json_state["game_state"]["combat_state"]["discard_pile"])
                 self.exhaust_pile: Deck = Deck(json_state["game_state"]["combat_state"]["exhaust_pile"])
 
-                current_turn = json_state["game_state"]["combat_state"]["turn"]
-                if self.the_bots_memory_book.memory_general[MemoryItem.LAST_KNOWN_TURN] != current_turn:
-                    self.the_bots_memory_book.set_new_turn_state()
-                self.the_bots_memory_book.memory_general[MemoryItem.LAST_KNOWN_TURN] = current_turn
-
-            else:
-                self.the_bots_memory_book.set_new_battle_state()
-
             self.deck: Deck = Deck(json_state["game_state"]["deck"])
-            self.memory_by_card = self.the_bots_memory_book.memory_by_card.copy()
-            self.memory_general = self.the_bots_memory_book.memory_general.copy()
 
     def is_game_running(self) -> bool:
         """Return whether a run is currently active."""

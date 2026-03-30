@@ -114,9 +114,6 @@ class EventLlmProvider:
             context.extras.get("retrieved_episodic_memories", "none"),
             context.extras.get("retrieved_semantic_memories", "none"),
         )
-        current_priorities = self._format_list_field(context.extras.get("current_priorities"), default="none")
-        risk_flags = self._format_list_field(context.extras.get("risk_flags"), default="stable")
-        deck_direction = str(context.extras.get("deck_direction", "unknown") or "unknown")
         event_options_text = self._format_event_options(
             context.game_state.get("event_options"),
             context.choice_list,
@@ -133,9 +130,6 @@ class EventLlmProvider:
             run_memory_summary=run_memory_summary,
             recent_llm_decisions=recent_llm_decisions,
             memory_context_block=memory_context_block,
-            current_priorities=current_priorities,
-            risk_flags=risk_flags,
-            deck_direction=deck_direction,
         )
 
     def _format_event_options(self, event_options: Any, choice_list: list[str]) -> str:
@@ -158,13 +152,6 @@ class EventLlmProvider:
         if choice_list:
             return "\n".join(f"- {index} | enabled | choice=\"{choice}\"" for index, choice in enumerate(choice_list))
         return "- none"
-
-    def _format_list_field(self, value: Any, default: str) -> str:
-        if isinstance(value, list):
-            normalized_values = [str(item).strip() for item in value if str(item).strip()]
-            return ", ".join(normalized_values) if normalized_values else default
-        value_text = str(value or "").strip()
-        return value_text if value_text else default
 
     def _build_memory_context_block(self, episodic: Any, semantic: Any) -> str:
         lines: list[str] = []

@@ -63,7 +63,7 @@ class TestLangMemService(unittest.TestCase):
                 available_commands=["choose"],
                 choice_list=["a"],
                 game_state={"floor": 5, "act": 1, "character_class": "IRONCLAD"},
-                extras={"run_id": "ironclad:seed1", "strategy_name": "peaceful_pummeling"},
+                extras={"run_id": "ironclad:seed1", "agent_identity": "neo_primates"},
             )
             service.record_accepted_decision(
                 context,
@@ -98,7 +98,7 @@ class TestLangMemService(unittest.TestCase):
                 available_commands=["choose"],
                 choice_list=["a"],
                 game_state={"floor": 5, "act": 1, "character_class": "IRONCLAD"},
-                extras={"run_id": "ironclad:seed1", "strategy_name": "peaceful_pummeling"},
+                extras={"run_id": "ironclad:seed1", "agent_identity": "neo_primates"},
             )
             service.record_accepted_decision(
                 context,
@@ -153,7 +153,7 @@ class TestLangMemService(unittest.TestCase):
                 available_commands=["choose"],
                 choice_list=["a"],
                 game_state={"floor": 9, "act": 1, "character_class": "IRONCLAD"},
-                extras={"run_id": "ironclad:seed1", "strategy_name": "peaceful_pummeling"},
+                extras={"run_id": "ironclad:seed1", "agent_identity": "neo_primates"},
             )
 
             service.finalize_run(

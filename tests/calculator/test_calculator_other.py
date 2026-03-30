@@ -4,16 +4,23 @@ from rs.calculator.enums.card_id import CardId
 from rs.calculator.enums.power_id import PowerId
 from rs.calculator.enums.relic_id import RelicId
 from rs.calculator.executor import get_best_battle_path
+from rs.calculator.interfaces.comparator_interface import ComparatorInterface
 from rs.calculator.interfaces.memory_items import MemoryItem, StanceType
-from rs.common.comparators.common_general_comparator import CommonGeneralComparator
 from test_helpers.resources import load_resource_state
+
+
+class LowestTotalEnemyHpComparator(ComparatorInterface):
+    def does_challenger_defeat_the_best(self, best, challenger, original) -> bool:
+        best_hp = sum(monster.current_hp for monster in best.monsters)
+        challenger_hp = sum(monster.current_hp for monster in challenger.monsters)
+        return challenger_hp < best_hp
 
 
 class CalculatorOtherTest(CalculatorTestFixture):
 
     def test_minions_die_when_leader_dies(self):
         state = load_resource_state("battles/general/minions.json")
-        path = get_best_battle_path(state, CommonGeneralComparator(), 100)
+        path = get_best_battle_path(state, LowestTotalEnemyHpComparator(), 100)
         for monster in path.state.monsters:
             self.assertEqual(0, monster.current_hp)
         self.assertEqual(1, len(path.plays))

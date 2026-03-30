@@ -117,9 +117,6 @@ class CardRewardLlmProvider:
         choice_card_summaries = context.extras.get("choice_card_summaries", [])
         reward_screen_flags = context.extras.get("reward_screen_flags", {})
         card_details = self._build_card_details(context)
-        current_priorities = self._format_list_field(context.extras.get("current_priorities"), default="none")
-        risk_flags = self._format_list_field(context.extras.get("risk_flags"), default="stable")
-        deck_direction = str(context.extras.get("deck_direction", "unknown") or "unknown")
         reward_options_text = self._format_reward_options(choice_card_summaries, context.choice_list)
 
         return PROMPT_TEMPLATE.format(
@@ -139,9 +136,6 @@ class CardRewardLlmProvider:
             run_memory_summary=run_memory_summary,
             recent_llm_decisions=recent_llm_decisions,
             memory_context_block=memory_context_block,
-            current_priorities=current_priorities,
-            risk_flags=risk_flags,
-            deck_direction=deck_direction,
             choice_card_summaries=json.dumps(choice_card_summaries, sort_keys=True),
             reward_screen_flags=json.dumps(reward_screen_flags, sort_keys=True),
             choice_card_details=json.dumps(card_details["choice"], sort_keys=True),
@@ -248,13 +242,6 @@ class CardRewardLlmProvider:
             return left.strip(), int(right)
 
         return text, 0
-
-    def _format_list_field(self, value: Any, default: str) -> str:
-        if isinstance(value, list):
-            normalized_values = [str(item).strip() for item in value if str(item).strip()]
-            return ", ".join(normalized_values) if normalized_values else default
-        value_text = str(value or "").strip()
-        return value_text if value_text else default
 
     def _build_memory_context_block(self, episodic: Any, semantic: Any) -> str:
         lines: list[str] = []

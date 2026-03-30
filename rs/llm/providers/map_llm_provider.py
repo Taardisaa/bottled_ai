@@ -94,9 +94,6 @@ class MapLlmProvider:
         )
 
     def _build_prompt(self, context: AgentContext) -> str:
-        current_priorities = self._format_list_field(context.extras.get("current_priorities"), default="none")
-        risk_flags = self._format_list_field(context.extras.get("risk_flags"), default="stable")
-        deck_direction = str(context.extras.get("deck_direction", "unknown") or "unknown")
         map_options_text = self._format_choice_list(context.choice_list)
         choice_branch_summaries_text = self._format_choice_branch_summaries(
             context.extras.get("choice_branch_summaries", []),
@@ -126,9 +123,6 @@ class MapLlmProvider:
             recent_llm_decisions=context.extras.get("recent_llm_decisions", "none"),
             episodic_memories=episodic_memories,
             semantic_memories=semantic_memories,
-            current_priorities=current_priorities,
-            risk_flags=risk_flags,
-            deck_direction=deck_direction,
             relic_names=json.dumps(context.extras.get("relic_names", []), sort_keys=True),
             deck_profile=json.dumps(context.extras.get("deck_profile", {}), sort_keys=True),
             boss_available=context.extras.get("boss_available", False),
@@ -150,13 +144,6 @@ class MapLlmProvider:
         if "unavailable" in status_text or "error" in status_text or "failed" in status_text:
             return "unavailable"
         return "ready"
-
-    def _format_list_field(self, value: Any, default: str) -> str:
-        if isinstance(value, list):
-            normalized_values = [str(item).strip() for item in value if str(item).strip()]
-            return ", ".join(normalized_values) if normalized_values else default
-        value_text = str(value or "").strip()
-        return value_text if value_text else default
 
     def _format_choice_branch_summaries(self, branch_summaries: Any) -> str:
         if not isinstance(branch_summaries, list) or not branch_summaries:

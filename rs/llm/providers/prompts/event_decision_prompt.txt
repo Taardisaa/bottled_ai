@@ -18,6 +18,3 @@ Floor: {floor}, Act: {act}, HP: {current_hp}/{max_hp}, Gold: {gold}
 Run memory summary: {run_memory_summary}
 Recent LLM decisions: {recent_llm_decisions}
 {memory_context_block}
-Current priorities: {current_priorities}
-Risk flags: {risk_flags}
-Deck direction: {deck_direction}

@@ -12,6 +12,7 @@ from rs.calculator.interfaces.card_interface import CardInterface
 from rs.calculator.interfaces.potions import Potions
 from rs.calculator.interfaces.powers import Powers
 from rs.calculator.interfaces.relics import Relics
+from rs.calculator.legacy_memory import build_default_memory_snapshots
 from rs.calculator.monster import Monster
 from rs.calculator.player import Player
 from rs.game.card import CardType, Card as GameCard
@@ -144,8 +145,9 @@ def create_battle_state(game_state: GameState) -> BattleState:
     orb_slots = game_state.get_player_orb_slots()
 
     # get custom state
-    memory_by_card = game_state.memory_by_card.copy()
-    memory_general = game_state.memory_general.copy()
+    default_memory_general, default_memory_by_card = build_default_memory_snapshots()
+    memory_by_card = dict(getattr(game_state, "memory_by_card", default_memory_by_card))
+    memory_general = dict(getattr(game_state, "memory_general", default_memory_general))
 
     return BattleState(player, hand, discard_pile, exhaust_pile, draw_pile, monsters, relics, must_discard,
                        amount_to_discard, cards_discarded_this_turn, orbs=orbs, orb_slots=orb_slots,

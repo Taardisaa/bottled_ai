@@ -5,14 +5,13 @@ from pathlib import Path
 from definitions import ROOT_DIR
 from rs.llm.integration.shop_purchase_context import build_shop_purchase_agent_context
 from rs.machine.state import GameState
-from rs.machine.the_bots_memory_book import TheBotsMemoryBook
 
 
 class TestShopPurchaseContextBuilder(unittest.TestCase):
     def test_build_shop_context_includes_offer_summaries_and_deck_profile(self):
         state_path = Path(ROOT_DIR) / "tests" / "res" / "shop" / "shop_buy_perfected_strike.json"
         payload = json.loads(state_path.read_text(encoding="utf-8"))
-        state = GameState(payload, TheBotsMemoryBook.new_default())
+        state = GameState(payload)
 
         context = build_shop_purchase_agent_context(state, "ShopPurchaseHandler")
 

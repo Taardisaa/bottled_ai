@@ -80,9 +80,6 @@ class TestEventLlmProvider(unittest.TestCase):
                 "recent_llm_decisions": "choose 0 at prior event",
                 "retrieved_episodic_memories": "none",
                 "retrieved_semantic_memories": "none",
-                "current_priorities": ["avoid_bad_event_traps"],
-                "risk_flags": [],
-                "deck_direction": "unknown",
             }
         )
 

@@ -3,12 +3,13 @@ import threading
 import time
 import traceback
 
-from rs.ai import *
-from rs.helper.seed import make_random_seed
 from rs.api.client import Client
 from rs.helper.logger import log, init_log, log_new_run_sequence
 from rs.llm.langmem_service import get_langmem_service, shutdown_langmem_service
+from rs.llm.run_context import DEFAULT_AGENT_IDENTITY
+from rs.machine.character import Character
 from rs.machine.game import Game
+from rs.helper.seed import make_random_seed
 from rs.utils.llm_utils import run_llm_preflight_check
 
 # If there are run seeds, it will run them. Otherwise, it will use the run amount.
@@ -16,17 +17,7 @@ run_seeds = [
     #'LGZ12EEMFGUK',
 ]
 DEFAULT_RUN_AMOUNT = 1
-DEFAULT_STRATEGY = PEACEFUL_PUMMELING
-
-
-STRATEGIES = {
-    "peaceful_pummeling": PEACEFUL_PUMMELING,
-    "requested_strike": REQUESTED_STRIKE,
-    "pwnder_my_orbs": PWNDER_MY_ORBS,
-    "claw_is_law": CLAW_IS_LAW,
-    "shivs_and_giggles": SHIVS_AND_GIGGLES,
-    "smart_agent": SMART_AGENT,
-}
+DEFAULT_CHARACTER = Character.WATCHER
 
 
 def _run_preflight_in_background() -> None:
@@ -54,12 +45,12 @@ def _run_preflight_in_background() -> None:
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run Bottled AI strategy loop.")
+    parser = argparse.ArgumentParser(description="Run Bottled AI agent loop.")
     parser.add_argument(
-        "--strategy",
-        choices=sorted(STRATEGIES.keys()),
-        default="peaceful_pummeling",
-        help="Strategy to run.",
+        "--character",
+        choices=sorted(character.name.lower() for character in Character),
+        default=DEFAULT_CHARACTER.name.lower(),
+        help="Character to run.",
     )
     parser.add_argument(
         "--run-amount",
@@ -77,13 +68,14 @@ def _parse_args() -> argparse.Namespace:
 
 if __name__ == "__main__":
     args = _parse_args()
-    selected_strategy = STRATEGIES[args.strategy]
+    selected_character = Character[args.character.upper()]
     selected_seeds = args.seed if args.seed is not None else run_seeds
     selected_run_amount = args.run_amount
 
     init_log()
     log("Starting up")
-    log(f"Selected strategy: {selected_strategy.name}")
+    log(f"Selected character: {selected_character.value}")
+    log(f"Agent identity: {DEFAULT_AGENT_IDENTITY}")
     log_new_run_sequence()
     try:
         client = Client()
@@ -96,7 +88,7 @@ if __name__ == "__main__":
             name="llm-preflight",
             daemon=True,
         ).start()
-        game = Game(client, selected_strategy)
+        game = Game(client, selected_character)
         if selected_seeds:
             for seed in selected_seeds:
                 game.start(seed)

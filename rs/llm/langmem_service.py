@@ -459,14 +459,14 @@ class LangMemService:
                 self._store.delete(namespace, record.memory_id)
 
     def _run_namespace(self, context: AgentContext) -> tuple[str, ...]:
-        strategy_name = self._resolve_strategy_name(context)
+        agent_identity = self._resolve_agent_identity(context)
         character_class, seed = self._resolve_character_and_seed(context)
-        return ("run", strategy_name, character_class, seed)
+        return ("run", agent_identity, character_class, seed)
 
     def _semantic_namespace(self, context: AgentContext) -> tuple[str, ...]:
-        strategy_name = self._resolve_strategy_name(context)
+        agent_identity = self._resolve_agent_identity(context)
         character_class, _ = self._resolve_character_and_seed(context)
-        return ("semantic", strategy_name, character_class, context.handler_name)
+        return ("semantic", agent_identity, character_class, context.handler_name)
 
     @staticmethod
     def _resolve_run_id(context: AgentContext) -> str:
@@ -483,9 +483,9 @@ class LangMemService:
         return character_class or "unknown_class", "unknown_seed"
 
     @staticmethod
-    def _resolve_strategy_name(context: AgentContext) -> str:
-        strategy_name = str(context.extras.get("strategy_name", "unknown_strategy")).strip()
-        return strategy_name or "unknown_strategy"
+    def _resolve_agent_identity(context: AgentContext) -> str:
+        agent_identity = str(context.extras.get("agent_identity", "neo_primates")).strip()
+        return agent_identity or "neo_primates"
 
     @staticmethod
     def _build_query_text(context: AgentContext) -> str:

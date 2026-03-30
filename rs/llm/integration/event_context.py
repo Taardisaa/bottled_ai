@@ -4,7 +4,7 @@ from typing import Any
 
 from rs.game.event import Event
 from rs.llm.agents.base_agent import AgentContext
-from rs.llm.run_context import get_current_strategy_name
+from rs.llm.run_context import get_current_agent_identity
 from rs.llm.state_summary_cache import get_cached_run_summary
 from rs.machine.state import GameState
 
@@ -63,7 +63,7 @@ def build_event_agent_context(state: GameState, handler_name: str) -> AgentConte
         },
         extras={
             "run_id": run_summary["run_id"],
-            "strategy_name": get_current_strategy_name(),
+            "agent_identity": get_current_agent_identity(),
             "relic_names": run_summary["relic_names"],
             "deck_size": run_summary["deck_size"],
             "run_memory_summary": run_summary["run_memory_summary"],

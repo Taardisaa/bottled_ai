@@ -39,9 +39,6 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
                 },
                 "run_memory_summary": "IRONCLAD on Act 1 Floor 10 at HP 50/80 with 99 gold.",
                 "recent_llm_decisions": "A1 F9 EventHandler -> choose 0 (0.88, safe heal)",
-                "current_priorities": ["find scaling"],
-                "risk_flags": [],
-                "deck_direction": "attack",
                 "choice_card_summaries": [
                     {"index": 0, "name": "pommel strike", "type": "ATTACK", "rarity": "COMMON", "cost": 1},
                     {"index": 1, "name": "cleave", "type": "ATTACK", "rarity": "COMMON", "cost": 1},

@@ -1,5 +1,9 @@
 # PLEASE NOTE! #
 
+This calculator stack is now treated as a preserved legacy engine. The long-term plan is
+to expose selected calculator capabilities as tools for an LLM-driven battle subagent,
+not to use calculator code as the main runtime policy layer.
+
 The interfaces package is meant to be entirely independent. It exits so that we can have interdependencies between
 parts (such as cards affecting the game state effecting cards again). Python hates this circular dependency, but with
 using interfaces we can avoid it. What this means for you as a dev:

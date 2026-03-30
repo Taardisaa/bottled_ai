@@ -8,12 +8,12 @@ from rs.calculator.enums.orb_id import OrbId
 from rs.calculator.enums.relic_id import RelicId
 from rs.calculator.interfaces.memory_items import StanceType, MemoryItem
 from rs.calculator.interfaces.potions import Potions
+from rs.calculator.legacy_memory import build_default_memory_snapshots
 from rs.calculator.play_path import PlayPath, get_paths
 from rs.calculator.enums.power_id import PowerId
 from rs.calculator.interfaces.relics import Relics
 from rs.calculator.player import Player
 from rs.calculator.monster import Monster
-from rs.machine.the_bots_memory_book import TheBotsMemoryBook
 
 
 class CalculatorTestFixture(unittest.TestCase):
@@ -21,10 +21,11 @@ class CalculatorTestFixture(unittest.TestCase):
     def given_state(self, card_id: CardId, upgrade: int = 0, targets: int = 1, player_powers=None,
                     relics: Relics = None, potions: Potions = None, cards_discarded_this_turn: int = 0, amount_to_discard: int = 0,
                     orbs: List[Tuple[OrbId, int]] = None, orb_slots: int = 0,
-                    memory_book: TheBotsMemoryBook = None) -> BattleState:
-
-        if memory_book is None:
-            memory_book = TheBotsMemoryBook.new_default()
+                    memory_general: dict | None = None,
+                    memory_by_card: dict | None = None) -> BattleState:
+        default_memory_general, default_memory_by_card = build_default_memory_snapshots()
+        selected_memory_general = default_memory_general if memory_general is None else memory_general
+        selected_memory_by_card = default_memory_by_card if memory_by_card is None else memory_by_card
 
         return BattleState(
             player=Player(True, 50, 100, 0, {} if player_powers is None else player_powers, energy=5, relics=relics, potions=potions),
@@ -36,8 +37,8 @@ class CalculatorTestFixture(unittest.TestCase):
             amount_to_discard=amount_to_discard,
             orbs=orbs,
             orb_slots=orb_slots,
-            memory_by_card=memory_book.memory_by_card.copy(),
-            memory_general=memory_book.memory_general.copy(),
+            memory_by_card=selected_memory_by_card.copy(),
+            memory_general=selected_memory_general.copy(),
         )
 
     def when_playing_the_first_card(self, hand_state: BattleState) -> PlayPath:

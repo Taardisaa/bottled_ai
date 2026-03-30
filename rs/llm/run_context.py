@@ -2,17 +2,18 @@ from __future__ import annotations
 
 from threading import Lock
 
-_current_strategy_name = "unknown_strategy"
+DEFAULT_AGENT_IDENTITY = "neo_primates"
+_current_agent_identity = DEFAULT_AGENT_IDENTITY
 _lock = Lock()
 
 
-def set_current_strategy_name(strategy_name: str) -> None:
-    normalized = str(strategy_name).strip() or "unknown_strategy"
+def set_current_agent_identity(agent_identity: str) -> None:
+    normalized = str(agent_identity).strip() or DEFAULT_AGENT_IDENTITY
     with _lock:
-        global _current_strategy_name
-        _current_strategy_name = normalized
+        global _current_agent_identity
+        _current_agent_identity = normalized
 
 
-def get_current_strategy_name() -> str:
+def get_current_agent_identity() -> str:
     with _lock:
-        return _current_strategy_name
+        return _current_agent_identity

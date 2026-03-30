@@ -6,8 +6,6 @@ from typing import List
 from loguru import logger as loguru_logger
 
 from definitions import ROOT_DIR
-from rs.calculator.enums.card_id import CardId
-from rs.calculator.interfaces.memory_items import MemoryItem, ResetSchedule
 from rs.helper.seed import get_seed_string
 from rs.machine.state import GameState
 
@@ -117,11 +115,11 @@ def log_missing_calculator_enums_to_run():
     log(f"Missing event names:{','.join(current_run_missing_events)}", "calculator_missing_enums")
 
 
-def log_run_results(state: GameState, elites: List[str], bosses: List[str], strategy_name: str):
+def log_run_results(state: GameState, elites: List[str], bosses: List[str], agent_identity: str):
     message = "Seed:" + get_seed_string(state.game_state()['seed'])
     message += ", Floor:" + str(state.floor())
     message += ", Score:" + str(state.game_state()['screen_state']['score'])
-    message += ", Strat: " + strategy_name
+    message += ", Agent: " + agent_identity
     message += ", DiedTo: "
     if state.get_monsters():
         for m in state.get_monsters():
@@ -133,10 +131,6 @@ def log_run_results(state: GameState, elites: List[str], bosses: List[str], stra
     message += " Relics: "
     for r in state.get_relics():
         message += r["name"] + ","
-    if state.memory_general[MemoryItem.KILLED_WITH_LESSON_LEARNED] > 0:
-        message += " Killed with Lesson Learned: " + str(state.memory_general[MemoryItem.KILLED_WITH_LESSON_LEARNED])
-    if sum(state.memory_by_card[CardId.RITUAL_DAGGER][ResetSchedule.GAME].values()) > 10:
-        message += " Extraordinary amount of Ritual Dagger power: " + str(sum(state.memory_by_card[CardId.RITUAL_DAGGER][ResetSchedule.GAME].values()))
     _append_log_line("run_history", message)
 
 

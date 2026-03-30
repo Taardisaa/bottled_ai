@@ -2,8 +2,8 @@ import unittest
 
 from rs.llm.benchmark_suite import (
     FIXED_LLM_BENCHMARK_SUITE,
+    group_suite_by_agent_identity,
     get_fixed_llm_benchmark_suite,
-    group_suite_by_strategy_key,
     summarize_benchmark_suite,
 )
 from rs.machine.character import Character
@@ -45,12 +45,10 @@ class TestBenchmarkSuite(unittest.TestCase):
         self.assertTrue(all(case.handler_area == "shop" for case in watcher_shop_cases))
         self.assertTrue(all(case.character == Character.WATCHER for case in watcher_shop_cases))
 
-    def test_grouping_by_strategy_collects_seed_strings(self):
-        grouped = group_suite_by_strategy_key(get_fixed_llm_benchmark_suite(include_future_phases=False))
+    def test_grouping_by_agent_identity_collects_seed_strings(self):
+        grouped = group_suite_by_agent_identity(get_fixed_llm_benchmark_suite(include_future_phases=False))
 
-        self.assertIn("requested_strike", grouped)
-        self.assertIn("shivs_and_giggles", grouped)
-        self.assertIn("peaceful_pummeling", grouped)
+        self.assertIn("neo_primates", grouped)
         self.assertTrue(all(isinstance(seed, str) and seed for seeds in grouped.values() for seed in seeds))
 
 

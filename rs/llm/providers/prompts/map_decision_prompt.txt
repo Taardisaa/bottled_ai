@@ -17,10 +17,7 @@ Floor: {floor}, Act: {act}, HP: {current_hp}/{max_hp}, Gold: {gold}
 Class: {character_class}, Ascension: {ascension_level}, Act boss: {act_boss}
 Run memory summary: {run_memory_summary}
 Recent LLM decisions: {recent_llm_decisions}
-{episodic_memories}{semantic_memories}Current priorities: {current_priorities}
-Risk flags: {risk_flags}
-Deck direction: {deck_direction}
-Current relics: {relic_names}
+{episodic_memories}{semantic_memories}Current relics: {relic_names}
 Deck profile: {deck_profile}
 Boss available: {boss_available}
 First node already chosen: {first_node_chosen}

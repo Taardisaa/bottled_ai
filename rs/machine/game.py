@@ -7,9 +7,9 @@ from rs.helper.logger import init_run_logging, log_to_run
 from rs.helper.seed import get_seed_string
 from rs.llm.agents.base_agent import AgentContext
 from rs.llm.langmem_service import get_langmem_service
-from rs.llm.run_context import set_current_strategy_name
+from rs.llm.run_context import DEFAULT_AGENT_IDENTITY, set_current_agent_identity
 from rs.llm.runtime import get_ai_player_graph
-from rs.machine.ai_strategy import AiStrategy
+from rs.machine.character import Character
 from rs.machine.default_game_over import DefaultGameOverHandler
 from rs.machine.handlers.default_cancel import DefaultCancelHandler
 from rs.machine.handlers.default_choose import DefaultChooseHandler
@@ -20,7 +20,6 @@ from rs.machine.handlers.default_play import DefaultPlayHandler
 from rs.machine.handlers.default_shop import DefaultShopHandler
 from rs.machine.handlers.default_wait import DefaultWaitHandler
 from rs.machine.state import GameState
-from rs.machine.the_bots_memory_book import TheBotsMemoryBook
 
 DEFAULT_GAME_HANDLERS = [
     DefaultLeaveHandler(),
@@ -36,21 +35,19 @@ DEFAULT_GAME_HANDLERS = [
 
 class Game:
 
-    def __init__(self, client: Client, strategy: AiStrategy):
+    def __init__(self, client: Client, character: Character):
         self.client = client
-        self.strategy = strategy
-        self.the_bots_memory_book = TheBotsMemoryBook()
+        self.character = character
         self.last_state: Optional[GameState] = None
         self.game_over_handler: DefaultGameOverHandler = DefaultGameOverHandler()
 
     def start(self, seed: str = ""):
-        self.the_bots_memory_book.set_new_game_state()
-        set_current_strategy_name(self.strategy.name)
+        set_current_agent_identity(DEFAULT_AGENT_IDENTITY)
         self.run_elites = []
         self.last_elite = ""
         self.run_bosses = []
         self.last_boss = ""
-        start_message = f"start {self.strategy.character.value}"
+        start_message = f"start {self.character.value}"
         if seed:
             start_message += " 0 " + seed
         self.__send_setup_command(start_message)
@@ -67,7 +64,12 @@ class Game:
                 handled = False
                 # Handle Game Over
                 if self.game_over_handler.can_handle(self.last_state):
-                    commands = self.game_over_handler.handle(self.last_state, self.run_elites, self.run_bosses, self.strategy.name)
+                    commands = self.game_over_handler.handle(
+                        self.last_state,
+                        self.run_elites,
+                        self.run_bosses,
+                        DEFAULT_AGENT_IDENTITY,
+                    )
                     for command in commands:
                         self.__send_command(command)
                     break
@@ -77,16 +79,12 @@ class Game:
                         self.__send_command(command)
                     handled = True
                     continue
-                # All other behaviours
-                for handler in self.strategy.handlers + DEFAULT_GAME_HANDLERS:
+                for handler in DEFAULT_GAME_HANDLERS:
                     if handler.can_handle(self.last_state):
                         log_to_run("Handler: " + str(handler))
                         action = handler.handle(self.last_state)
                         if not action:
                             continue
-                        if action.memory_book is not None:
-                            self.the_bots_memory_book = action.memory_book
-                            log_to_run("Memory of next action: " + str(vars(self.the_bots_memory_book)))
                         for command in action.commands:
                             self.__send_command(command)
                         handled = True
@@ -98,15 +96,13 @@ class Game:
             self.__finalize_langmem_run()
 
     def __send_command(self, command: str):
-        self.last_state = GameState(json.loads(self.client.send_message(command)), self.the_bots_memory_book)
+        self.last_state = GameState(json.loads(self.client.send_message(command)))
 
     def __send_silent_command(self, command: str):
-        self.last_state = GameState(json.loads(self.client.send_message(command, silent=True)),
-                                    self.the_bots_memory_book)
+        self.last_state = GameState(json.loads(self.client.send_message(command, silent=True)))
 
     def __send_setup_command(self, command: str):
-        self.last_state = GameState(json.loads(self.client.send_message(command, before_run=True)),
-                                    self.the_bots_memory_book)
+        self.last_state = GameState(json.loads(self.client.send_message(command, before_run=True)))
 
     def __handle_state_based_logging(self):
         monsters = self.last_state.get_monsters()
@@ -140,7 +136,7 @@ class Game:
             },
             extras={
                 "run_id": f"{str(game_state.get('class', 'unknown')).strip().lower()}:{str(game_state.get('seed', 'unknown')).strip().lower()}",
-                "strategy_name": self.strategy.name,
+                "agent_identity": DEFAULT_AGENT_IDENTITY,
                 "run_memory_summary": (
                     f"{game_state.get('class', 'unknown')} act {game_state.get('act', 'unknown')} "
                     f"floor {self.last_state.floor()} hp {game_state.get('current_hp', 'unknown')}/"

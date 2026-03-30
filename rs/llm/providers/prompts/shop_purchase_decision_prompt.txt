@@ -18,9 +18,6 @@ Class: {character_class}, Ascension: {ascension_level}, Act boss: {act_boss}
 Run memory summary: {run_memory_summary}
 Recent LLM decisions: {recent_llm_decisions}
 {memory_context_block}
-Current priorities: {current_priorities}
-Risk flags: {risk_flags}
-Deck direction: {deck_direction}
 Has removable curse: {has_removable_curse}
 Deck size: {deck_size}
 Deck profile: {deck_profile}

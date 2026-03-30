@@ -116,9 +116,6 @@ class ShopPurchaseLlmProvider:
         purge_cost = context.extras.get("purge_cost", "unknown")
         purge_available = context.extras.get("purge_available", False)
         offer_summaries = context.extras.get("offer_summaries", {})
-        current_priorities = self._format_list_field(context.extras.get("current_priorities"), default="none")
-        risk_flags = self._format_list_field(context.extras.get("risk_flags"), default="stable")
-        deck_direction = str(context.extras.get("deck_direction", "unknown") or "unknown")
         shop_options_text = self._format_choice_list(context.choice_list)
         potion_context_lines = self._build_potion_context_lines(
             offer_summaries.get("potions", []),
@@ -142,9 +139,6 @@ class ShopPurchaseLlmProvider:
             run_memory_summary=run_memory_summary,
             recent_llm_decisions=recent_llm_decisions,
             memory_context_block=memory_context_block,
-            current_priorities=current_priorities,
-            risk_flags=risk_flags,
-            deck_direction=deck_direction,
             relic_names=json.dumps(relic_names, sort_keys=True),
             potion_context_lines=potion_context_lines,
             purge_cost=purge_cost,
@@ -158,13 +152,6 @@ class ShopPurchaseLlmProvider:
         if not choice_list:
             return "- none"
         return "\n".join(f"- {index} | option=\"{str(choice).strip()}\"" for index, choice in enumerate(choice_list))
-
-    def _format_list_field(self, value: Any, default: str) -> str:
-        if isinstance(value, list):
-            normalized_values = [str(item).strip() for item in value if str(item).strip()]
-            return ", ".join(normalized_values) if normalized_values else default
-        value_text = str(value or "").strip()
-        return value_text if value_text else default
 
     def _compact_deck_profile(self, deck_profile: Any) -> dict[str, Any]:
         if not isinstance(deck_profile, dict):

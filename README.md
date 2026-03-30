@@ -3,14 +3,12 @@ Customizable bot for roguelike deck-building game [Slay the Spire](https://store
 
 ## FAQ
 ### Does it win a lot? Is it super smart?
-Depends on which character and strategy is in use. We've got a few different ones! Our current best is a watcher strategy with 52% winrate. You can see our most current [winrates here](docs/winrates.md).
+This repo is currently moving away from fixed rule-based strategies and toward agent-driven control. Historical winrates and older writeups still exist, but they describe the legacy bot stack rather than the new `neo_primates` direction.
 
 ### How does it work? Machine Learning? Gen AI?
-Nah, just good old-fashioned manually constructed automated decision-making. For example:
-- Selecting Cards, Boss Relics, and Upgrades works with a prioritized list, e.g. our strategy for Watcher might prefer taking Blasphemy over Tranquility.
-- Some decisions have specific conditions attached to them, like in the Shining Light event: take the damage for the 2 random upgrades... but not if we don't have much health left.
-- In combat, the bot figures out what the outcome would be for each of the different ways it could play its hand (with a graph traversal and a simulation we constructed). Then, the bot picks the outcome it likes best and plays the cards in that order.
-  - To decide what the best outcome is, the bot weighs about 40 different values against each other. Simple example: the bot prefers a turn where it defeats an enemy, but not if we will take a bunch of damage to make it happen.
+The project now keeps two separate layers:
+- `rs/llm` is the AI runtime and memory stack. This is the direction for live decision-making.
+- `rs/calculator` is a preserved deterministic engine intended for future tool-wrapping inside battle subagents, not as the main runtime policy layer.
 
 ### Does the bot have access to secret information, e.g. the outcomes of random rolls, or what it will draw next?
 No, it can only see what the player does.
@@ -69,7 +67,7 @@ Just use the Discussions feature here on GitHub. We're happy to discuss or suppo
 ## Tools
 
 ### Bot Controls
-- Adjust which bot strategy is used, the amount of runs, and the seed in [main.py](main.py).
+- Adjust the character, run amount, and seed in [main.py](main.py).
 - Pause the bot in [run_controller.txt](run_controller.txt).
 - Adjust the speed of certain actions in [presentation_config.py](presentation_config.py).
 

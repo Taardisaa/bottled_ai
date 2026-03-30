@@ -1,6 +1,5 @@
 from typing import List
 
-from rs.calculator.enums.card_id import CardId
 from rs.game.card import Card, CardType
 
 

@@ -43,16 +43,11 @@ class AIPlayerGraphState(TypedDict, total=False):
     handler_name: str
     route_name: GraphRoute
     run_id: str
-    strategy_name: str
     screen_type: str
     floor: int | None
     act: int | None
     distilled_run_summary: str
     recent_key_decisions: list[dict[str, Any]]
-    current_priorities: list[str]
-    risk_flags: list[str]
-    deck_direction: str
-    run_hypotheses: list[str]
     retrieved_episodic_memories: str
     retrieved_semantic_memories: str
     langmem_status: str
@@ -485,9 +480,9 @@ class AIPlayerGraph:
         run_id = str(context.extras.get("run_id", "")).strip()
         if run_id != "":
             return run_id
-        strategy_name = str(context.extras.get("strategy_name", "unknown")).strip().lower() or "unknown"
+        agent_identity = str(context.extras.get("agent_identity", "neo_primates")).strip().lower() or "neo_primates"
         character_class = str(context.game_state.get("character_class", "unknown")).strip().lower() or "unknown"
-        return f"{strategy_name}:{character_class}"
+        return f"{agent_identity}:{character_class}"
 
     def _ingest_game_state_node(self, state: AIPlayerGraphState) -> Dict[str, Any]:
         self._trace_state_event(
@@ -498,29 +493,14 @@ class AIPlayerGraph:
         )
         context = self._deserialize_context(state["context_payload"])
         recent_key_decisions = self._trim_recent_decisions(state.get("recent_key_decisions", []))
-        current_priorities = self._build_current_priorities(context)
-        risk_flags = self._build_risk_flags(context)
-        deck_direction = self._build_deck_direction(context)
-        run_hypotheses = self._build_run_hypotheses(context, current_priorities, risk_flags, deck_direction)
-        distilled_run_summary = self._build_distilled_run_summary(
-            context,
-            recent_key_decisions,
-            current_priorities,
-            risk_flags,
-            deck_direction,
-        )
+        distilled_run_summary = self._build_distilled_run_summary(context, recent_key_decisions)
         result = {
             "handler_name": context.handler_name,
             "run_id": self._resolve_thread_id(context),
-            "strategy_name": str(context.extras.get("strategy_name", "unknown")),
             "screen_type": context.screen_type,
             "floor": self._coerce_int(context.game_state.get("floor")),
             "act": self._coerce_int(context.game_state.get("act")),
             "recent_key_decisions": recent_key_decisions,
-            "current_priorities": current_priorities,
-            "risk_flags": risk_flags,
-            "deck_direction": deck_direction,
-            "run_hypotheses": run_hypotheses,
             "distilled_run_summary": distilled_run_summary,
             "decision_context_payload": state.get("context_payload", {}),
             "retrieved_episodic_memories": "none",
@@ -540,15 +520,8 @@ class AIPlayerGraph:
             event_type="node_exit",
             thread_id=result["run_id"],
             node_name="ingest_game_state",
-            summary=(
-                f"act={result['act']}, floor={result['floor']}, priorities={current_priorities}, "
-                f"risks={risk_flags}, deck_direction={deck_direction}"
-            ),
-            metadata={
-                "current_priorities": list(current_priorities),
-                "risk_flags": list(risk_flags),
-                "deck_direction": deck_direction,
-            },
+            summary=f"act={result['act']}, floor={result['floor']}, recent_count={len(recent_key_decisions)}",
+            metadata={"recent_key_decisions": list(recent_key_decisions)},
         )
         return result
 
@@ -911,13 +884,7 @@ class AIPlayerGraph:
         })
         recent_key_decisions = self._trim_recent_decisions(recent_key_decisions)
 
-        distilled_run_summary = self._build_distilled_run_summary(
-            decision_context,
-            recent_key_decisions,
-            cast(list[str], state.get("current_priorities", [])),
-            cast(list[str], state.get("risk_flags", [])),
-            str(state.get("deck_direction", "unknown")),
-        )
+        distilled_run_summary = self._build_distilled_run_summary(decision_context, recent_key_decisions)
         result = {
             "recent_key_decisions": recent_key_decisions,
             "distilled_run_summary": distilled_run_summary,
@@ -985,10 +952,6 @@ class AIPlayerGraph:
             extras.get("retrieved_semantic_memories", "none"),
         )
         extras["langmem_status"] = state.get("langmem_status", extras.get("langmem_status", "disabled_by_config"))
-        extras["current_priorities"] = list(state.get("current_priorities", []))
-        extras["risk_flags"] = list(state.get("risk_flags", []))
-        extras["deck_direction"] = str(state.get("deck_direction", "unknown"))
-        extras["run_hypotheses"] = list(state.get("run_hypotheses", []))
         return AgentContext(
             handler_name=context.handler_name,
             screen_type=context.screen_type,
@@ -998,96 +961,16 @@ class AIPlayerGraph:
             extras=extras,
         )
 
-    def _build_current_priorities(self, context: AgentContext) -> list[str]:
-        priorities: list[str] = []
-        hp = self._coerce_int(context.game_state.get("current_hp"))
-        max_hp = self._coerce_int(context.game_state.get("max_hp"))
-        gold = self._coerce_int(context.game_state.get("gold"))
-        if hp is not None and max_hp is not None and max_hp > 0 and hp / max_hp <= 0.4:
-            priorities.append("survive")
-        if context.handler_name == "ShopPurchaseHandler" and gold is not None and gold >= 150:
-            priorities.append("spend_gold_well")
-        if context.handler_name == "CardRewardHandler":
-            priorities.append("tighten_deck_direction")
-        if context.handler_name == "MapHandler":
-            priorities.append("plan_safe_route")
-        if context.handler_name == "EventHandler":
-            priorities.append("avoid_bad_event_traps")
-        if not priorities:
-            priorities.append("stay_consistent")
-        return priorities
-
-    def _build_risk_flags(self, context: AgentContext) -> list[str]:
-        flags: list[str] = []
-        hp = self._coerce_int(context.game_state.get("current_hp"))
-        max_hp = self._coerce_int(context.game_state.get("max_hp"))
-        gold = self._coerce_int(context.game_state.get("gold"))
-        if hp is not None and max_hp is not None and max_hp > 0:
-            hp_ratio = hp / max_hp
-            if hp_ratio <= 0.35:
-                flags.append("low_hp")
-            elif hp_ratio <= 0.55:
-                flags.append("moderate_hp")
-        if context.handler_name == "ShopPurchaseHandler" and gold is not None and gold < 75:
-            flags.append("low_gold")
-        if context.handler_name == "CardRewardHandler" and bool(context.extras.get("potions_full", False)):
-            flags.append("potions_full")
-        return flags
-
-    def _build_deck_direction(self, context: AgentContext) -> str:
-        deck_profile = context.extras.get("deck_profile")
-        if not isinstance(deck_profile, dict) or not deck_profile:
-            return "unknown"
-
-        weighted_features: list[tuple[str, float]] = []
-        for key, value in deck_profile.items():
-            try:
-                score = float(value)
-            except (TypeError, ValueError):
-                continue
-            weighted_features.append((str(key), score))
-
-        if not weighted_features:
-            return "unknown"
-        weighted_features.sort(key=lambda item: item[1], reverse=True)
-        return weighted_features[0][0]
-
-    def _build_run_hypotheses(
-            self,
-            context: AgentContext,
-            current_priorities: list[str],
-            risk_flags: list[str],
-            deck_direction: str,
-    ) -> list[str]:
-        hypotheses: list[str] = []
-        if deck_direction != "unknown":
-            hypotheses.append(f"deck leans {deck_direction}")
-        if "survive" in current_priorities:
-            hypotheses.append("run needs immediate stabilization")
-        if "plan_safe_route" in current_priorities:
-            hypotheses.append("pathing should avoid risky elites unless payoff is clear")
-        if "low_hp" in risk_flags:
-            hypotheses.append("preserve hp over greedy upside")
-        if not hypotheses:
-            hypotheses.append(f"maintain {context.handler_name} consistency")
-        return hypotheses[:4]
-
     def _build_distilled_run_summary(
             self,
             context: AgentContext,
             recent_key_decisions: list[dict[str, Any]],
-            current_priorities: list[str],
-            risk_flags: list[str],
-            deck_direction: str,
     ) -> str:
         base_summary = str(context.extras.get("run_memory_summary", "")).strip()
-        priority_text = ", ".join(current_priorities) if current_priorities else "none"
-        risk_text = ", ".join(risk_flags) if risk_flags else "stable"
         recent_summary = self._format_recent_decisions(recent_key_decisions)
-        return (
-            f"{base_summary} | deck_direction={deck_direction} | priorities={priority_text} "
-            f"| risks={risk_text} | recent={recent_summary}"
-        ).strip()
+        if recent_summary == "none":
+            return base_summary
+        return f"{base_summary} | recent={recent_summary}".strip()
 
     def _format_recent_decisions(self, recent_key_decisions: list[dict[str, Any]]) -> str:
         trimmed = self._trim_recent_decisions(recent_key_decisions)

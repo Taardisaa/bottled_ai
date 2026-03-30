@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from rs.llm.agents.base_agent import AgentContext
-from rs.llm.run_context import get_current_strategy_name
+from rs.llm.run_context import get_current_agent_identity
 from rs.llm.state_summary_cache import get_cached_run_summary
 from rs.machine.state import GameState
 
@@ -84,7 +84,7 @@ def build_shop_purchase_agent_context(state: GameState, handler_name: str) -> Ag
         },
         extras={
             "run_id": run_summary["run_id"],
-            "strategy_name": get_current_strategy_name(),
+            "agent_identity": get_current_agent_identity(),
             "has_removable_curse": state.deck.contains_curses_we_can_remove(),
             "deck_size": run_summary["deck_size"],
             "deck_profile": run_summary["deck_profile"],

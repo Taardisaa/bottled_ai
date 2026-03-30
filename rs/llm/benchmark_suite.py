@@ -8,17 +8,9 @@ from typing import Any, Iterable, Sequence
 
 from definitions import ROOT_DIR
 from rs.helper.seed import get_seed_string
+from rs.llm.run_context import DEFAULT_AGENT_IDENTITY
 from rs.machine.character import Character
 from rs.machine.state import GameState
-from rs.machine.the_bots_memory_book import TheBotsMemoryBook
-
-
-_DEFAULT_STRATEGY_BY_CHARACTER = {
-    Character.IRONCLAD: "requested_strike",
-    Character.SILENT: "shivs_and_giggles",
-    Character.DEFECT: "pwnder_my_orbs",
-    Character.WATCHER: "peaceful_pummeling",
-}
 
 _CHARACTER_NAME_MAP = {
     "IRONCLAD": Character.IRONCLAD,
@@ -41,7 +33,7 @@ class LlmBenchmarkCase:
     phase: str
     seed: str
     character: Character
-    recommended_strategy: str
+    agent_identity: str
     act: int
     floor: int
     room_type: str
@@ -191,7 +183,7 @@ def _build_case(spec: _CaseSpec) -> LlmBenchmarkCase:
         phase=spec.phase,
         seed=metadata["seed"],
         character=character,
-        recommended_strategy=_DEFAULT_STRATEGY_BY_CHARACTER[character],
+        agent_identity=DEFAULT_AGENT_IDENTITY,
         act=metadata["act"],
         floor=metadata["floor"],
         room_type=metadata["room_type"],
@@ -203,14 +195,10 @@ def _build_case(spec: _CaseSpec) -> LlmBenchmarkCase:
 FIXED_LLM_BENCHMARK_SUITE: tuple[LlmBenchmarkCase, ...] = tuple(_build_case(spec) for spec in _SUITE_SPECS)
 
 
-def load_benchmark_case_state(
-        case: LlmBenchmarkCase,
-        memory_book: TheBotsMemoryBook | None = None,
-) -> GameState:
-    selected_memory_book = TheBotsMemoryBook.new_default() if memory_book is None else memory_book
+def load_benchmark_case_state(case: LlmBenchmarkCase) -> GameState:
     path = Path(ROOT_DIR) / case.fixture_path
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return GameState(payload, selected_memory_book)
+    return GameState(payload)
 
 
 def get_fixed_llm_benchmark_suite(
@@ -233,10 +221,10 @@ def get_fixed_llm_benchmark_suite(
     return cases
 
 
-def group_suite_by_strategy_key(cases: Sequence[LlmBenchmarkCase]) -> dict[str, list[str]]:
+def group_suite_by_agent_identity(cases: Sequence[LlmBenchmarkCase]) -> dict[str, list[str]]:
     grouped: dict[str, list[str]] = {}
     for case in cases:
-        grouped.setdefault(case.recommended_strategy, []).append(case.seed)
+        grouped.setdefault(case.agent_identity, []).append(case.seed)
     return grouped
 
 

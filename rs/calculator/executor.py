@@ -6,7 +6,6 @@ from rs.calculator.interfaces.comparator_interface import ComparatorInterface
 from rs.calculator.play_path import PlayPath, get_paths_bfs
 from rs.machine.handlers.handler_action import HandlerAction
 from rs.machine.state import GameState
-from rs.machine.the_bots_memory_book import TheBotsMemoryBook
 
 
 def get_best_battle_path(game_state: GameState, comparator: ComparatorInterface, max_path_count) -> PlayPath:
@@ -31,18 +30,13 @@ def get_best_battle_action(game_state: GameState, comparator: ComparatorInterfac
     if path and path.plays:
         next_move = path.plays[0]
 
-        # create a temp state for finding the state of the custom state after the chosen action
-        state = create_battle_state(game_state)
-        state.transform_from_play(next_move, is_first_play=False)  # not sure if it's ok that I'm setting that false
-        memory_book = TheBotsMemoryBook(memory_by_card=state.memory_by_card.copy(), memory_general=state.memory_general.copy())
-
         if next_move[1] == -1:
-            return HandlerAction(commands=[f"play {next_move[0] + 1}"], memory_book=memory_book)
+            return HandlerAction(commands=[f"play {next_move[0] + 1}"])
         if next_move[1] == PLAY_DISCARD:
-            return HandlerAction(commands=get_discard_commands(path.plays), memory_book=memory_book)
+            return HandlerAction(commands=get_discard_commands(path.plays))
         if next_move[1] == PLAY_EXHAUST:
-            return HandlerAction(commands=get_exhaust_commands(path.plays), memory_book=memory_book)
-        return HandlerAction(commands=[f"play {next_move[0] + 1} {next_move[1]}"], memory_book=memory_book)
+            return HandlerAction(commands=get_exhaust_commands(path.plays))
+        return HandlerAction(commands=[f"play {next_move[0] + 1} {next_move[1]}"])
     return None
 
 
