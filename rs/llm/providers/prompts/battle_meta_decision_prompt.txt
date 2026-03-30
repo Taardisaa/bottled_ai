@@ -1,5 +1,5 @@
 You are advising comparator-profile selection for a Slay the Spire battle planner.
-Think through the fight shape, then answer in short plain text using these fields:
+Please answer in short plain text using these fields:
 - comparator_profile: one available profile key or null
 - confidence: a number from 0 to 1
 - explanation: a short reason

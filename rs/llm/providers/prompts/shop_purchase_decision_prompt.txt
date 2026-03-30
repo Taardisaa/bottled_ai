@@ -1,5 +1,5 @@
 You are selecting a Slay the Spire shop command.
-Think through the shop options, then answer in short plain text using these fields:
+Please answer in short plain text using these fields:
 - proposed_command: one command or null
 - confidence: a number from 0 to 1
 - explanation: a short reason

@@ -115,12 +115,18 @@ class TestLiteLlmUtils(unittest.TestCase):
 
     def test_get_model_token_limit_falls_back_to_static_qwen_mlx_limit(self):
         with patch("rs.utils.llm_utils.litellm_get_max_tokens", side_effect=Exception("not mapped")):
-            self.assertEqual(262144, llm_utils.get_model_token_limit("openai/qwen-mlx"))
+            self.assertEqual(
+                llm_utils.MODEL_TOKEN_LIMITS["qwen-mlx"],
+                llm_utils.get_model_token_limit("openai/qwen-mlx"),
+            )
 
     def test_get_model_token_limit_suppresses_known_static_qwen_mlx_fallback_log(self):
         with patch("rs.utils.llm_utils.litellm_get_max_tokens", side_effect=Exception("not mapped")), \
                 patch("rs.utils.llm_utils.logger.debug") as debug_mock:
-            self.assertEqual(262144, llm_utils.get_model_token_limit("openai/qwen-mlx"))
+            self.assertEqual(
+                llm_utils.MODEL_TOKEN_LIMITS["qwen-mlx"],
+                llm_utils.get_model_token_limit("openai/qwen-mlx"),
+            )
 
         debug_mock.assert_not_called()
 
@@ -510,6 +516,50 @@ class TestLiteLlmUtils(unittest.TestCase):
             calls[1].get("extra_body", {}).get("chat_template_kwargs", {}).get("enable_thinking"),
         )
         self.assertIs(DecisionSchema, calls[1]["response_format"])
+
+    def test_two_layer_struct_convert_truncates_only_think_block(self):
+        original_truncate_message = llm_utils.truncate_message
+        calls = []
+        huge_think = "reasoning " * 500
+
+        def fake_truncate_message(message, model=llm_utils.config.fast_llm_model, max_tokens=None, reserve_tokens=2000):
+            if message == huge_think:
+                return "trimmed reasoning", 0
+            return original_truncate_message(message, model=model, max_tokens=max_tokens, reserve_tokens=reserve_tokens)
+
+        def fake_completion(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return {
+                    "choices": [{"message": {"content": f"<think>{huge_think}</think>\nproposed_command: choose 0"}}],
+                    "usage": {"total_tokens": 7},
+                }
+            return {
+                "choices": [{"message": {"content": '{"proposed_command":"choose 0","confidence":0.8,"explanation":"converted"}'}}],
+                "usage": {"total_tokens": 5},
+            }
+
+        with patch("rs.utils.llm_utils._ensure_api_key_for_model", return_value=True), \
+                patch("rs.utils.llm_utils.completion", side_effect=fake_completion), \
+                patch("rs.utils.llm_utils.count_tokens", side_effect=lambda text, model: 2048 if text == huge_think else len(str(text).split())), \
+                patch("rs.utils.llm_utils.truncate_message", side_effect=fake_truncate_message):
+            response, total_tokens = llm_utils.ask_llm_once(
+                message="test",
+                model="qwen-mlx",
+                struct=DecisionSchema,
+                temperature=1.0,
+                enable_cache=False,
+                two_layer_struct_convert=True,
+            )
+
+        self.assertIsInstance(response, DecisionSchema)
+        self.assertEqual(12, total_tokens)
+        self.assertEqual(2, len(calls))
+        second_prompt = calls[1]["messages"][0]["content"]
+        self.assertIn("<think>trimmed reasoning", second_prompt)
+        self.assertIn("...[truncated thinking]...", second_prompt)
+        self.assertIn("proposed_command: choose 0", second_prompt)
+        self.assertNotIn(huge_think, second_prompt)
 
 
 if __name__ == "__main__":

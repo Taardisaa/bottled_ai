@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import re
 import sys
 from typing import Optional, Any, Union, Tuple, List
 
@@ -40,7 +41,7 @@ MODEL_TOKEN_LIMITS = {
     "gpt-5": 272000,
     "gpt-5-mini": 272000,
     # Local MLX deployment configuration.
-    "qwen-mlx": 262144,
+    "qwen-mlx": 125600,
 }
 
 
@@ -54,6 +55,9 @@ _TOKENIZER_PROVIDER_PREFIXES = {
     "bedrock",
     "ollama",
 }
+
+SECOND_LAYER_THINKING_TOKEN_LIMIT = 1024
+_THINK_BLOCK_PATTERN = re.compile(r"<think>(.*?)</think>", re.IGNORECASE | re.DOTALL)
 
 
 @dataclass(frozen=True)
@@ -680,20 +684,85 @@ def _normalize_temperature_for_model(model: str, temperature: float) -> float:
 def _build_struct_convert_prompt(raw_response_text: str, struct: LLMAcceptStructParam) -> str:
     if isinstance(struct, type) and issubclass(struct, BaseModel):
         schema = json.dumps(struct.model_json_schema(), sort_keys=True)
+        properties = struct.model_json_schema().get("properties", {})
+        field_lines: list[str] = []
+        example_payload: dict[str, Any] = {}
+        for field_name, field_schema in properties.items():
+            if not isinstance(field_schema, dict):
+                continue
+            field_type = field_schema.get("type")
+            if field_type is None and isinstance(field_schema.get("anyOf"), list):
+                any_of_types = [
+                    option.get("type")
+                    for option in field_schema["anyOf"]
+                    if isinstance(option, dict) and option.get("type")
+                ]
+                field_type = " or ".join(str(value) for value in any_of_types)
+            field_lines.append(f"- {field_name}: {field_type or 'value'}")
+            if "default" in field_schema:
+                example_payload[field_name] = field_schema["default"]
+            elif field_type == "string":
+                example_payload[field_name] = ""
+            elif field_type == "number":
+                example_payload[field_name] = 0
+            elif field_type == "integer":
+                example_payload[field_name] = 0
+            elif field_type == "boolean":
+                example_payload[field_name] = False
+            else:
+                example_payload[field_name] = None
+
+        fields_text = "\n".join(field_lines) if field_lines else "- follow the schema exactly"
+        example_text = json.dumps(example_payload, ensure_ascii=False, sort_keys=True)
         return (
-            "Convert the following model output into a JSON object that strictly matches this JSON Schema. "
-            "Return only the JSON object and no extra text.\n"
-            f"Schema:\n{schema}\n"
-            "Model output to convert:\n"
+            "Convert the source model output below into a final JSON decision object.\n"
+            "Output requirements:\n"
+            f"{fields_text}\n"
+            "Rules:\n"
+            "- Return exactly one JSON object.\n"
+            "- Do not include markdown fences or extra commentary.\n"
+            "- Do not add extra keys.\n"
+            "- If the source is uncertain or non-committal, use null where appropriate.\n"
+            f"Example JSON shape:\n{example_text}\n"
+            f"JSON Schema:\n{schema}\n"
+            "Source model output:\n"
             f"{raw_response_text}"
         )
 
     return (
-        "Convert the following model output into a valid JSON object. "
-        "Return only the JSON object and no extra text.\n"
-        "Model output to convert:\n"
+        "Convert the source model output below into a valid JSON object.\n"
+        "Rules:\n"
+        "- Return exactly one JSON object.\n"
+        "- Do not include markdown fences or extra commentary.\n"
+        "Source model output:\n"
         f"{raw_response_text}"
     )
+
+
+def _truncate_think_blocks_for_second_layer(
+        raw_response_text: str,
+        model: str,
+        max_think_tokens: int = SECOND_LAYER_THINKING_TOKEN_LIMIT,
+) -> str:
+    def _replace(match: re.Match[str]) -> str:
+        think_content = match.group(1)
+        think_tokens = count_tokens(think_content, model)
+        if think_tokens <= max_think_tokens:
+            return match.group(0)
+
+        truncated_content, _ = truncate_message(
+            think_content,
+            model=model,
+            max_tokens=max_think_tokens,
+            reserve_tokens=0,
+        )
+        logger.info(
+            f"Second-layer conversion truncated <think> block from {think_tokens} to "
+            f"{count_tokens(truncated_content, model)} tokens"
+        )
+        return f"<think>{truncated_content}\n...[truncated thinking]...\n</think>"
+
+    return _THINK_BLOCK_PATTERN.sub(_replace, raw_response_text)
 
 
 def _ask_llm_once_two_layer(
@@ -732,6 +801,7 @@ def _ask_llm_once_two_layer(
         first_content_text = json.dumps(first_content, ensure_ascii=False)
     else:
         first_content_text = str(first_content)
+    first_content_text = _truncate_think_blocks_for_second_layer(first_content_text, model)
 
     conversion_model = config.fast_llm_model
     if not _ensure_api_key_for_model(conversion_model):
