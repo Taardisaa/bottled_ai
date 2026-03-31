@@ -6,7 +6,9 @@ from types import SimpleNamespace
 
 from rs.llm.ai_player_graph import AIPlayerGraph
 from rs.llm.battle_runtime import BattleSessionResult
+from rs.llm.campfire_subagent import CampfireSessionResult
 from rs.llm.config import LlmConfig
+from rs.llm.reward_subagent import RewardSessionResult
 from test_helpers.resources import load_resource_state
 
 
@@ -61,6 +63,42 @@ class FakeBattleSubagent:
             executed_commands=[["end"]],
             steps=1,
             summary="fake battle",
+        )
+
+
+class FakeRewardSubagent:
+    def __init__(self, commands=None):
+        self.calls = []
+        self.commands = ["choose 0"] if commands is None else list(commands)
+
+    def run(self, state, runtime):
+        self.calls.append(state)
+        final_state = runtime.execute(self.commands)
+        return RewardSessionResult(
+            handled=True,
+            final_state=final_state,
+            session_id="fake-reward-session",
+            executed_commands=[list(self.commands)],
+            steps=1,
+            summary="fake reward",
+        )
+
+
+class FakeCampfireSubagent:
+    def __init__(self, commands=None):
+        self.calls = []
+        self.commands = ["choose rest"] if commands is None else list(commands)
+
+    def run(self, state, runtime):
+        self.calls.append(state)
+        final_state = runtime.execute(self.commands)
+        return CampfireSessionResult(
+            handled=True,
+            final_state=final_state,
+            session_id="fake-campfire-session",
+            executed_commands=[list(self.commands)],
+            steps=1,
+            summary="fake campfire",
         )
 
 
@@ -166,6 +204,118 @@ class TestAIPlayerGraph(unittest.TestCase):
         self.assertEqual(next_state.screen_type(), result.final_state.screen_type())
         self.assertEqual([["end"]], runtime.commands)
         self.assertEqual(1, len(battle_subagent.calls))
+
+    def test_combat_reward_state_is_routed_to_reward_subagent(self):
+        reward_subagent = FakeRewardSubagent(["choose 0"])
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+            combat_reward_subagent=reward_subagent,
+        )
+
+        state = load_resource_state("/combat_reward/combat_reward_gold.json")
+        next_state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeBattleRuntime(state, next_state)
+
+        self.assertTrue(graph.can_handle(state))
+        self.assertIsNone(graph.decide(state))
+
+        result = graph.execute(state, runtime=runtime)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual("CARD_REWARD", result.final_state.screen_type())
+        self.assertEqual([["choose 0"]], runtime.commands)
+        self.assertEqual(1, len(reward_subagent.calls))
+
+    def test_campfire_state_is_routed_to_campfire_subagent(self):
+        campfire_subagent = FakeCampfireSubagent(["choose rest"])
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+            campfire_subagent=campfire_subagent,
+        )
+
+        state = load_resource_state("/campfire/campfire_rest.json")
+        next_state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeBattleRuntime(state, next_state)
+
+        self.assertTrue(graph.can_handle(state))
+        self.assertIsNone(graph.decide(state))
+
+        result = graph.execute(state, runtime=runtime)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual("CARD_REWARD", result.final_state.screen_type())
+        self.assertEqual([["choose rest"]], runtime.commands)
+        self.assertEqual(1, len(campfire_subagent.calls))
+
+    def test_boss_reward_state_is_routed_to_reward_subagent(self):
+        reward_subagent = FakeRewardSubagent(["choose 1"])
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+            boss_reward_subagent=reward_subagent,
+        )
+
+        state = load_resource_state("/relics/boss_reward_first_is_best.json")
+        next_state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeBattleRuntime(state, next_state)
+
+        self.assertTrue(graph.can_handle(state))
+        self.assertIsNone(graph.decide(state))
+
+        result = graph.execute(state, runtime=runtime)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual("CARD_REWARD", result.final_state.screen_type())
+        self.assertEqual([["choose 1"]], runtime.commands)
+        self.assertEqual(1, len(reward_subagent.calls))
+
+    def test_astrolabe_transform_state_is_routed_to_reward_subagent(self):
+        reward_subagent = FakeRewardSubagent(["choose 2"])
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+            astrolabe_transform_subagent=reward_subagent,
+        )
+
+        state = load_resource_state("/relics/boss_reward_astrolabe.json")
+        next_state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeBattleRuntime(state, next_state)
+
+        self.assertTrue(graph.can_handle(state))
+        self.assertIsNone(graph.decide(state))
+
+        result = graph.execute(state, runtime=runtime)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual("CARD_REWARD", result.final_state.screen_type())
+        self.assertEqual([["choose 2"]], runtime.commands)
+        self.assertEqual(1, len(reward_subagent.calls))
 
     def test_single_choice_choose_state_is_not_handled_by_unified_graph(self):
         graph = AIPlayerGraph(

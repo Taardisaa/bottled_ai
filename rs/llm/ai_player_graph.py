@@ -12,6 +12,7 @@ from rs.game.path import PathHandlerConfig
 from rs.game.screen_type import ScreenType
 from rs.llm.battle_runtime import BattleRuntimeAdapter, BattleSessionResult
 from rs.llm.battle_subagent import BattleSubagent
+from rs.llm.campfire_subagent import CampfireSessionResult, CampfireSubagent
 from rs.llm.battle_tools import (
     AnalyzeWithCalculatorTool,
     EnumerateLegalActionsTool,
@@ -22,7 +23,11 @@ from rs.llm.battle_tools import (
 from rs.llm.agents.base_agent import AgentContext, AgentDecision
 from rs.llm.config import LlmConfig, load_llm_config
 from rs.llm.graph_trace import build_graph_trace_record, mirror_graph_trace_to_run_log, write_graph_trace
+from rs.llm.integration.astrolabe_transform_context import build_astrolabe_transform_agent_context
 from rs.llm.integration.battle_context import build_battle_agent_context, is_battle_scope_state
+from rs.llm.integration.campfire_context import build_campfire_agent_context
+from rs.llm.integration.boss_reward_context import build_boss_reward_agent_context, is_astrolabe_transform_state
+from rs.llm.integration.combat_reward_context import build_combat_reward_agent_context
 from rs.llm.langmem_service import LangMemService, get_langmem_service
 from rs.llm.providers.card_reward_llm_provider import CardRewardLlmProvider
 from rs.llm.providers.event_llm_provider import EventLlmProvider
@@ -34,6 +39,12 @@ from rs.llm.integration.card_reward_context import build_card_reward_agent_conte
 from rs.llm.integration.event_context import build_event_agent_context
 from rs.llm.integration.map_context import build_map_agent_context
 from rs.llm.integration.shop_purchase_context import build_shop_purchase_agent_context
+from rs.llm.reward_subagent import (
+    AstrolabeTransformSubagent,
+    BossRewardSubagent,
+    CombatRewardSubagent,
+    RewardSessionResult,
+)
 from rs.machine.command import Command
 from rs.machine.state import GameState
 
@@ -53,6 +64,8 @@ class GraphExecutionResult:
     commands: list[str] | None = None
     final_state: GameState | None = None
     battle_session: BattleSessionResult | None = None
+    reward_session: RewardSessionResult | None = None
+    campfire_session: CampfireSessionResult | None = None
 
 
 class AIPlayerGraphState(TypedDict, total=False):
@@ -87,6 +100,10 @@ class AIPlayerGraph:
             config: LlmConfig | None = None,
             langmem_service: LangMemService | None = None,
             battle_subagent: BattleSubagent | None = None,
+            campfire_subagent: CampfireSubagent | None = None,
+            combat_reward_subagent: CombatRewardSubagent | None = None,
+            boss_reward_subagent: BossRewardSubagent | None = None,
+            astrolabe_transform_subagent: AstrolabeTransformSubagent | None = None,
     ):
         self._config = load_llm_config() if config is None else config
         self._langmem_service = get_langmem_service(self._config) if langmem_service is None else langmem_service
@@ -98,6 +115,22 @@ class AIPlayerGraph:
         self._card_reward_provider = CardRewardLlmProvider()
         self._map_provider = MapLlmProvider()
         self._battle_subagent = BattleSubagent(langmem_service=self._langmem_service) if battle_subagent is None else battle_subagent
+        self._campfire_subagent = (
+            CampfireSubagent(langmem_service=self._langmem_service)
+            if campfire_subagent is None else campfire_subagent
+        )
+        self._combat_reward_subagent = (
+            CombatRewardSubagent(langmem_service=self._langmem_service)
+            if combat_reward_subagent is None else combat_reward_subagent
+        )
+        self._boss_reward_subagent = (
+            BossRewardSubagent(langmem_service=self._langmem_service)
+            if boss_reward_subagent is None else boss_reward_subagent
+        )
+        self._astrolabe_transform_subagent = (
+            AstrolabeTransformSubagent(langmem_service=self._langmem_service)
+            if astrolabe_transform_subagent is None else astrolabe_transform_subagent
+        )
         if battle_subagent is None:
             self._battle_subagent.register_tool(EnumerateLegalActionsTool())
             self._battle_subagent.register_tool(AnalyzeWithCalculatorTool())
@@ -135,11 +168,17 @@ class AIPlayerGraph:
             )
             return None
 
-        if context.handler_name == "BattleHandler":
+        if context.handler_name in {
+            "BattleHandler",
+            "CampfireHandler",
+            "CombatRewardHandler",
+            "BossRewardHandler",
+            "AstrolabeTransformHandler",
+        }:
             self._trace_context_event(
                 context,
                 event_type="graph_unhandled_state",
-                summary="battle handler requires runtime-aware execute() path",
+                summary=f"{context.handler_name} requires runtime-aware execute() path",
             )
             return None
 
@@ -275,7 +314,13 @@ class AIPlayerGraph:
         if not self._config.is_handler_enabled(context.handler_name):
             return None
 
-        if context.handler_name != "BattleHandler":
+        if context.handler_name not in {
+            "BattleHandler",
+            "CampfireHandler",
+            "CombatRewardHandler",
+            "BossRewardHandler",
+            "AstrolabeTransformHandler",
+        }:
             commands = self.decide(state)
             if commands is None:
                 return None
@@ -285,16 +330,52 @@ class AIPlayerGraph:
             self._trace_context_event(
                 context,
                 event_type="graph_unhandled_state",
-                summary="battle handler was selected but no runtime adapter was provided",
+                summary=f"{context.handler_name} was selected but no runtime adapter was provided",
             )
             return None
 
-        session_result = self._battle_subagent.run(state, runtime)
+        if context.handler_name == "BattleHandler":
+            session_result = self._battle_subagent.run(state, runtime)
+            return GraphExecutionResult(
+                handled=session_result.handled,
+                commands=None,
+                final_state=session_result.final_state,
+                battle_session=session_result,
+            )
+
+        if context.handler_name == "CampfireHandler":
+            campfire_session = self._campfire_subagent.run(state, runtime)
+            return GraphExecutionResult(
+                handled=campfire_session.handled,
+                commands=None,
+                final_state=campfire_session.final_state,
+                campfire_session=campfire_session,
+            )
+
+        if context.handler_name == "CombatRewardHandler":
+            reward_session = self._combat_reward_subagent.run(state, runtime)
+            return GraphExecutionResult(
+                handled=reward_session.handled,
+                commands=None,
+                final_state=reward_session.final_state,
+                reward_session=reward_session,
+            )
+
+        if context.handler_name == "BossRewardHandler":
+            reward_session = self._boss_reward_subagent.run(state, runtime)
+            return GraphExecutionResult(
+                handled=reward_session.handled,
+                commands=None,
+                final_state=reward_session.final_state,
+                reward_session=reward_session,
+            )
+
+        reward_session = self._astrolabe_transform_subagent.run(state, runtime)
         return GraphExecutionResult(
-            handled=session_result.handled,
+            handled=reward_session.handled,
             commands=None,
-            final_state=session_result.final_state,
-            battle_session=session_result,
+            final_state=reward_session.final_state,
+            reward_session=reward_session,
         )
 
     def get_compiled_graph(self) -> Any:
@@ -520,13 +601,35 @@ class AIPlayerGraph:
     def _is_single_choice_non_battle_bypass(self, state: GameState) -> bool:
         return (
             not is_battle_scope_state(state)
+            and not self._is_runtime_subagent_scope(state)
             and state.has_command(Command.CHOOSE)
             and len(state.get_choice_list()) <= 1
+        )
+
+    def _is_runtime_subagent_scope(self, state: GameState) -> bool:
+        return (
+            state.screen_type() == ScreenType.REST.value
+            or
+            state.screen_type() == ScreenType.COMBAT_REWARD.value
+            or state.screen_type() == ScreenType.BOSS_REWARD.value
+            or is_astrolabe_transform_state(state)
         )
 
     def _build_context(self, state: GameState) -> AgentContext | None:
         if is_battle_scope_state(state):
             return build_battle_agent_context(state, "BattleHandler")
+
+        if state.screen_type() == ScreenType.REST.value and state.has_command(Command.CHOOSE):
+            return build_campfire_agent_context(state, "CampfireHandler")
+
+        if state.screen_type() == ScreenType.COMBAT_REWARD.value and state.has_command(Command.CHOOSE):
+            return build_combat_reward_agent_context(state, "CombatRewardHandler")
+
+        if state.screen_type() == ScreenType.BOSS_REWARD.value and state.has_command(Command.CHOOSE):
+            return build_boss_reward_agent_context(state, "BossRewardHandler")
+
+        if is_astrolabe_transform_state(state) and state.has_command(Command.CHOOSE):
+            return build_astrolabe_transform_agent_context(state, "AstrolabeTransformHandler")
 
         if state.screen_type() == ScreenType.EVENT.value and state.has_command(Command.CHOOSE):
             return build_event_agent_context(state, "EventHandler")
@@ -1094,6 +1197,22 @@ class AIPlayerGraph:
             return [proposed_command, "wait 30"]
 
         if context.handler_name == "MapHandler":
+            return [proposed_command]
+
+        if context.handler_name == "CampfireHandler":
+            return [proposed_command]
+
+        if context.handler_name == "CombatRewardHandler":
+            if proposed_command.startswith("potion use ") or proposed_command.startswith("potion discard "):
+                return ["wait 30", proposed_command]
+            return [proposed_command]
+
+        if context.handler_name == "BossRewardHandler":
+            if proposed_command == "skip":
+                return ["skip", "proceed"]
+            return [proposed_command]
+
+        if context.handler_name == "AstrolabeTransformHandler":
             return [proposed_command]
 
         return None
