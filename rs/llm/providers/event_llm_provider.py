@@ -39,8 +39,12 @@ class EventLlmProvider:
         self.model = config.fast_llm_model if model is None else model
         self.temperature = temperature
 
-    def propose(self, context: AgentContext) -> EventLlmProposal:
-        prompt = self._build_prompt(context)
+    def propose(
+            self,
+            context: AgentContext,
+            validation_feedback: Dict[str, Any] | None = None,
+    ) -> EventLlmProposal:
+        prompt = self._build_prompt(context, validation_feedback)
         try:
             from rs.utils.llm_utils import ask_llm_once
         except Exception as e:
@@ -101,7 +105,11 @@ class EventLlmProvider:
             metadata=metadata,
         )
 
-    def _build_prompt(self, context: AgentContext) -> str:
+    def _build_prompt(
+            self,
+            context: AgentContext,
+            validation_feedback: Dict[str, Any] | None = None,
+    ) -> str:
         event_name = context.game_state.get("event_name", "unknown")
         floor = context.game_state.get("floor", "unknown")
         act = context.game_state.get("act", "unknown")
@@ -119,6 +127,14 @@ class EventLlmProvider:
             context.choice_list,
         )
 
+        validation_feedback_block = ""
+        if validation_feedback is not None:
+            validation_feedback_block = (
+                "Validation feedback from previous rejected proposal:\n"
+                f"{validation_feedback}\n"
+                "If feedback is present, correct the command to satisfy it.\n"
+            )
+
         return PROMPT_TEMPLATE.format(
             event_options_text=event_options_text,
             event_name=event_name,
@@ -130,6 +146,7 @@ class EventLlmProvider:
             run_memory_summary=run_memory_summary,
             recent_llm_decisions=recent_llm_decisions,
             memory_context_block=memory_context_block,
+            validation_feedback_block=validation_feedback_block,
         )
 
     def _format_event_options(self, event_options: Any, choice_list: list[str]) -> str:

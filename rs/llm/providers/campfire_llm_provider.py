@@ -31,7 +31,12 @@ class CampfireDecisionSchema(BaseModel):
 
 
 class CampfireCommandProvider(Protocol):
-    def propose(self, context: AgentContext, working_memory: dict[str, Any]) -> CampfireCommandProposal:
+    def propose(
+            self,
+            context: AgentContext,
+            working_memory: dict[str, Any],
+            validation_feedback: dict[str, Any] | None = None,
+    ) -> CampfireCommandProposal:
         ...
 
 
@@ -40,8 +45,13 @@ class CampfireLlmProvider:
         self.model = config.fast_llm_model if model is None else model
         self.temperature = temperature
 
-    def propose(self, context: AgentContext, working_memory: dict[str, Any]) -> CampfireCommandProposal:
-        prompt = self._build_prompt(context, working_memory)
+    def propose(
+            self,
+            context: AgentContext,
+            working_memory: dict[str, Any],
+            validation_feedback: dict[str, Any] | None = None,
+    ) -> CampfireCommandProposal:
+        prompt = self._build_prompt(context, working_memory, validation_feedback)
         try:
             from rs.utils.llm_utils import ask_llm_once
         except Exception as exc:
@@ -99,7 +109,12 @@ class CampfireLlmProvider:
             },
         )
 
-    def _build_prompt(self, context: AgentContext, working_memory: dict[str, Any]) -> str:
+    def _build_prompt(
+            self,
+            context: AgentContext,
+            working_memory: dict[str, Any],
+            validation_feedback: dict[str, Any] | None = None,
+    ) -> str:
         payload = {
             "handler_name": context.handler_name,
             "screen_type": context.screen_type,
@@ -123,6 +138,7 @@ class CampfireLlmProvider:
                 "executed_command_batches": [list(batch) for batch in working_memory.get("executed_command_batches", [])][-4:],
                 "decision_loop_count": int(working_memory.get("decision_loop_count", 0)),
             },
+            "validation_feedback": dict(validation_feedback or {}),
         }
         return PROMPT_TEMPLATE.format(
             payload_json=json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)

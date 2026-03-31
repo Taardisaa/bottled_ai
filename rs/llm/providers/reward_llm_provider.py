@@ -37,7 +37,12 @@ class RewardDecisionSchema(BaseModel):
 
 
 class RewardCommandProvider(Protocol):
-    def propose(self, context: AgentContext, working_memory: dict[str, Any]) -> RewardCommandProposal:
+    def propose(
+            self,
+            context: AgentContext,
+            working_memory: dict[str, Any],
+            validation_feedback: dict[str, Any] | None = None,
+    ) -> RewardCommandProposal:
         ...
 
 
@@ -57,8 +62,13 @@ class BaseRewardLlmProvider:
         self._cache_namespace = cache_namespace
         self._provider_name = provider_name
 
-    def propose(self, context: AgentContext, working_memory: dict[str, Any]) -> RewardCommandProposal:
-        prompt = self._build_prompt(context, working_memory)
+    def propose(
+            self,
+            context: AgentContext,
+            working_memory: dict[str, Any],
+            validation_feedback: dict[str, Any] | None = None,
+    ) -> RewardCommandProposal:
+        prompt = self._build_prompt(context, working_memory, validation_feedback)
         try:
             from rs.utils.llm_utils import ask_llm_once
         except Exception as exc:
@@ -117,16 +127,31 @@ class BaseRewardLlmProvider:
             },
         )
 
-    def _build_prompt(self, context: AgentContext, working_memory: dict[str, Any]) -> str:
-        payload = self._build_payload(context, working_memory)
+    def _build_prompt(
+            self,
+            context: AgentContext,
+            working_memory: dict[str, Any],
+            validation_feedback: dict[str, Any] | None = None,
+    ) -> str:
+        payload = self._build_payload(context, working_memory, validation_feedback)
         return self._prompt_template.format(
             payload_json=json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
         )
 
-    def _build_payload(self, context: AgentContext, working_memory: dict[str, Any]) -> dict[str, Any]:
+    def _build_payload(
+            self,
+            context: AgentContext,
+            working_memory: dict[str, Any],
+            validation_feedback: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         raise Exception("must be implemented by children")
 
-    def _base_payload(self, context: AgentContext, working_memory: dict[str, Any]) -> dict[str, Any]:
+    def _base_payload(
+            self,
+            context: AgentContext,
+            working_memory: dict[str, Any],
+            validation_feedback: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         return {
             "handler_name": context.handler_name,
             "screen_type": context.screen_type,
@@ -143,6 +168,7 @@ class BaseRewardLlmProvider:
                 "executed_command_batches": [list(batch) for batch in working_memory.get("executed_command_batches", [])][-4:],
                 "decision_loop_count": int(working_memory.get("decision_loop_count", 0)),
             },
+            "validation_feedback": dict(validation_feedback or {}),
         }
 
     def _choice_token_counts(self, choice_list: list[Any]) -> dict[str, int]:
@@ -165,8 +191,17 @@ class CombatRewardLlmProvider(BaseRewardLlmProvider):
             provider_name="combat_reward_subagent",
         )
 
-    def _build_payload(self, context: AgentContext, working_memory: dict[str, Any]) -> dict[str, Any]:
-        payload = self._base_payload(context, working_memory)
+    def _build_payload(
+            self,
+            context: AgentContext,
+            working_memory: dict[str, Any],
+            validation_feedback: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = self._base_payload(context, working_memory, validation_feedback)
+        llm_choice_list = context.extras.get("llm_choice_list")
+        if isinstance(llm_choice_list, list):
+            payload["choice_list"] = [str(choice) for choice in llm_choice_list]
+            payload["choice_token_counts"] = self._choice_token_counts(payload["choice_list"])
         payload.update({
             "reward_summaries": context.extras.get("reward_summaries", []),
             "held_potion_names": context.extras.get("held_potion_names", []),
@@ -174,8 +209,89 @@ class CombatRewardLlmProvider(BaseRewardLlmProvider):
             "potions_full": context.extras.get("potions_full", False),
             "deck_profile": context.extras.get("deck_profile", {}),
             "relic_names": context.extras.get("relic_names", []),
+            "has_card_reward_row": context.extras.get("has_card_reward_row", False),
+            "non_card_reward_count": context.extras.get("non_card_reward_count", 0),
         })
         return payload
+
+    def _build_prompt(
+            self,
+            context: AgentContext,
+            working_memory: dict[str, Any],
+            validation_feedback: dict[str, Any] | None = None,
+    ) -> str:
+        payload = self._build_payload(context, working_memory, validation_feedback)
+        structured_sections_text = self._build_structured_sections(context, payload)
+
+        prompt = self._prompt_template.format(
+            payload_json=json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+        )
+        return f"{structured_sections_text}\n\n{prompt}"
+
+    def _build_structured_sections(self, context: AgentContext, payload: dict[str, Any]) -> str:
+        sections: list[str] = ["CombatReward structured context:"]
+        sections.extend(self._run_snapshot_lines(context, payload))
+        sections.append("Reward rows:")
+        sections.extend(self._reward_row_lines(payload))
+        sections.extend(self._command_availability_lines(payload))
+        sections.extend(self._potion_capacity_lines(payload))
+        sections.extend(self._deterministic_handoff_lines(payload))
+        return "\n".join(sections)
+
+    def _run_snapshot_lines(self, context: AgentContext, payload: dict[str, Any]) -> list[str]:
+        floor = context.game_state.get("floor", "unknown")
+        act = context.game_state.get("act", "unknown")
+        hp = context.game_state.get("current_hp", "unknown")
+        max_hp = context.game_state.get("max_hp", "unknown")
+        deck_profile = payload.get("deck_profile", {})
+        relic_names = payload.get("relic_names", [])
+        return [
+            f"- Run snapshot: floor={floor}, act={act}, hp={hp}/{max_hp}",
+            f"- Deck profile: {json.dumps(deck_profile, ensure_ascii=False, sort_keys=True)}",
+            f"- Relics: {json.dumps(relic_names, ensure_ascii=False)}",
+        ]
+
+    def _reward_row_lines(self, payload: dict[str, Any]) -> list[str]:
+        reward_rows = payload.get("reward_summaries", [])
+        lines: list[str] = []
+        for row in reward_rows if isinstance(reward_rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            summary_line = str(row.get("reward_summary_line", "")).strip()
+            if summary_line != "":
+                lines.append(f"- {summary_line}")
+                continue
+            idx = row.get("choice_index", "?")
+            token = row.get("choice_token", "")
+            reward_type = row.get("reward_type", "UNKNOWN")
+            lines.append(f"- idx={idx} token='{token}' type={reward_type}")
+        if not lines:
+            return ["- none"]
+        return lines
+
+    def _command_availability_lines(self, payload: dict[str, Any]) -> list[str]:
+        available_commands = payload.get("available_commands", [])
+        choice_token_counts = payload.get("choice_token_counts", {})
+        return [
+            "Command availability:",
+            f"- available_commands={json.dumps(available_commands, ensure_ascii=False)}",
+            f"- choice_token_counts={json.dumps(choice_token_counts, ensure_ascii=False, sort_keys=True)}",
+        ]
+
+    def _potion_capacity_lines(self, payload: dict[str, Any]) -> list[str]:
+        return [
+            "Potion capacity:",
+            f"- potions_full={bool(payload.get('potions_full', False))}",
+            f"- held_potion_names={json.dumps(payload.get('held_potion_names', []), ensure_ascii=False)}",
+            f"- reward_potion_names={json.dumps(payload.get('reward_potion_names', []), ensure_ascii=False)}",
+        ]
+
+    def _deterministic_handoff_lines(self, payload: dict[str, Any]) -> list[str]:
+        return [
+            "Deterministic handoff:",
+            f"- has_card_reward_row={bool(payload.get('has_card_reward_row', False))}",
+            f"- non_card_reward_count={int(payload.get('non_card_reward_count', 0))}",
+        ]
 
 
 class BossRewardLlmProvider(BaseRewardLlmProvider):
@@ -188,8 +304,13 @@ class BossRewardLlmProvider(BaseRewardLlmProvider):
             provider_name="boss_reward_subagent",
         )
 
-    def _build_payload(self, context: AgentContext, working_memory: dict[str, Any]) -> dict[str, Any]:
-        payload = self._base_payload(context, working_memory)
+    def _build_payload(
+            self,
+            context: AgentContext,
+            working_memory: dict[str, Any],
+            validation_feedback: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = self._base_payload(context, working_memory, validation_feedback)
         payload.update({
             "boss_relic_options": context.extras.get("boss_relic_options", []),
             "choice_metadata_mismatch": context.extras.get("choice_metadata_mismatch", False),
@@ -212,8 +333,13 @@ class AstrolabeTransformLlmProvider(BaseRewardLlmProvider):
             provider_name="astrolabe_transform_subagent",
         )
 
-    def _build_payload(self, context: AgentContext, working_memory: dict[str, Any]) -> dict[str, Any]:
-        payload = self._base_payload(context, working_memory)
+    def _build_payload(
+            self,
+            context: AgentContext,
+            working_memory: dict[str, Any],
+            validation_feedback: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = self._base_payload(context, working_memory, validation_feedback)
         payload.update({
             "selectable_cards": context.extras.get("selectable_cards", []),
             "selected_cards": context.extras.get("selected_cards", []),

@@ -57,7 +57,10 @@ class GameState:
 
     def get_choice_list(self) -> List[str]:
         """Return the current screen choice list."""
-        return self.game_state()["choice_list"]
+        raw = self.game_state().get("choice_list", [])
+        if not isinstance(raw, list):
+            return []
+        return [str(choice) for choice in raw]
 
     def get_choice_list_upgrade_stripped_from_choice(self) -> List[str]:
         """Return choice list with trailing plus upgrade markers removed."""

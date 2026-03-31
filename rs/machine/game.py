@@ -90,10 +90,8 @@ class Game:
                     for command in commands:
                         self.__send_command(command)
                     break
-                graph_commands = self.__decide_with_ai_player_graph()
-                if graph_commands is not None:
-                    for command in graph_commands:
-                        self.__send_command(command)
+                graph_handled = self.__decide_with_ai_player_graph()
+                if graph_handled:
                     handled = True
                     continue
                 for handler in DEFAULT_GAME_HANDLERS:
@@ -174,18 +172,21 @@ class Game:
         }
         get_langmem_service().finalize_run(context, payload)
 
-    def __decide_with_ai_player_graph(self) -> list[str] | None:
+    def __decide_with_ai_player_graph(self) -> bool:
         if self.last_state is None:
-            return None
+            return False
 
         ai_player_graph = get_ai_player_graph()
         if not ai_player_graph.is_enabled() or not ai_player_graph.can_handle(self.last_state):
-            return None
+            return False
 
         log_to_run("Handler: AIPlayerGraph")
         result = ai_player_graph.execute(self.last_state, runtime=_GameBattleRuntimeAdapter(self))
         if result is None or not result.handled:
-            return None
+            return False
         if result.final_state is not None:
             self.last_state = result.final_state
-        return result.commands
+
+        for command in result.commands or []:
+            self.__send_command(command)
+        return True

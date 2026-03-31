@@ -10,6 +10,8 @@ from langgraph.graph import END, START, StateGraph
 
 from rs.game.path import PathHandlerConfig
 from rs.game.screen_type import ScreenType
+from rs.llm.action_executor import ActionExecutionResult, UnifiedActionExecutor
+from rs.llm.action_policy_registry import ActionPolicyRegistry
 from rs.llm.battle_runtime import BattleRuntimeAdapter, BattleSessionResult
 from rs.llm.battle_subagent import BattleSubagent
 from rs.llm.campfire_subagent import CampfireSessionResult, CampfireSubagent
@@ -28,11 +30,14 @@ from rs.llm.integration.battle_context import build_battle_agent_context, is_bat
 from rs.llm.integration.campfire_context import build_campfire_agent_context
 from rs.llm.integration.boss_reward_context import build_boss_reward_agent_context, is_astrolabe_transform_state
 from rs.llm.integration.combat_reward_context import build_combat_reward_agent_context
+from rs.llm.integration.generic_context import build_generic_unhandled_agent_context
 from rs.llm.langmem_service import LangMemService, get_langmem_service
 from rs.llm.providers.card_reward_llm_provider import CardRewardLlmProvider
 from rs.llm.providers.event_llm_provider import EventLlmProvider
+from rs.llm.providers.generic_llm_provider import GenericLlmProvider
 from rs.llm.providers.map_llm_provider import MapLlmProvider
 from rs.llm.providers.shop_purchase_llm_provider import ShopPurchaseLlmProvider
+from rs.llm.subagent_validation_middleware import validate_proposed_command
 from rs.llm.telemetry import build_decision_telemetry, write_decision_telemetry
 from rs.llm.validator import validate_command
 from rs.llm.integration.card_reward_context import build_card_reward_agent_context
@@ -54,6 +59,7 @@ GraphRoute = Literal[
     "decide_shop",
     "decide_card_reward",
     "decide_map",
+    "decide_generic",
     "decide_fallback",
 ]
 
@@ -114,6 +120,7 @@ class AIPlayerGraph:
         self._shop_provider = ShopPurchaseLlmProvider()
         self._card_reward_provider = CardRewardLlmProvider()
         self._map_provider = MapLlmProvider()
+        self._generic_provider = GenericLlmProvider()
         self._battle_subagent = BattleSubagent(langmem_service=self._langmem_service) if battle_subagent is None else battle_subagent
         self._campfire_subagent = (
             CampfireSubagent(langmem_service=self._langmem_service)
@@ -131,6 +138,15 @@ class AIPlayerGraph:
             AstrolabeTransformSubagent(langmem_service=self._langmem_service)
             if astrolabe_transform_subagent is None else astrolabe_transform_subagent
         )
+        self._action_policy = ActionPolicyRegistry()
+        self._action_executor = UnifiedActionExecutor(
+            battle_runner=self,
+            campfire_runner=self,
+            combat_reward_runner=self,
+            boss_reward_runner=self,
+            astrolabe_runner=self,
+            context_builder=self._build_context,
+        )
         if battle_subagent is None:
             self._battle_subagent.register_tool(EnumerateLegalActionsTool())
             self._battle_subagent.register_tool(AnalyzeWithCalculatorTool())
@@ -142,8 +158,8 @@ class AIPlayerGraph:
         return self._config.enabled and self._config.ai_player_graph_enabled
 
     def can_handle(self, state: GameState) -> bool:
-        if self._is_single_choice_non_battle_bypass(state):
-            return False
+        if self._deterministic_single_choice_commands(state) is not None:
+            return True
         return self._build_context(state) is not None
 
     def decide(self, state: GameState) -> list[str] | None:
@@ -151,13 +167,14 @@ class AIPlayerGraph:
             self._trace_raw_event(event_type="graph_disabled", summary="ai player graph disabled by config")
             return None
 
-        if self._is_single_choice_non_battle_bypass(state):
+        deterministic_commands = self._deterministic_single_choice_commands(state)
+        if deterministic_commands is not None:
             self._trace_raw_event(
-                event_type="graph_unhandled_state",
+                event_type="graph_decide_success",
                 screen_type=state.screen_type(),
-                summary="single-choice choose state bypasses ai player graph",
+                summary=f"deterministic_single_choice commands={deterministic_commands}",
             )
-            return None
+            return deterministic_commands
 
         context = self._build_context(state)
         if context is None:
@@ -305,8 +322,12 @@ class AIPlayerGraph:
         if not self.is_enabled():
             return None
 
-        if self._is_single_choice_non_battle_bypass(state):
-            return None
+        deterministic_commands = self._deterministic_single_choice_commands(state)
+        if deterministic_commands is not None:
+            if runtime is None:
+                return GraphExecutionResult(handled=True, commands=deterministic_commands, final_state=state)
+            final_state = runtime.execute(deterministic_commands)
+            return GraphExecutionResult(handled=True, commands=None, final_state=final_state)
 
         context = self._build_context(state)
         if context is None:
@@ -314,68 +335,20 @@ class AIPlayerGraph:
         if not self._config.is_handler_enabled(context.handler_name):
             return None
 
-        if context.handler_name not in {
-            "BattleHandler",
-            "CampfireHandler",
-            "CombatRewardHandler",
-            "BossRewardHandler",
-            "AstrolabeTransformHandler",
-        }:
+        if runtime is None:
             commands = self.decide(state)
             if commands is None:
                 return None
             return GraphExecutionResult(handled=True, commands=commands, final_state=state)
 
-        if runtime is None:
-            self._trace_context_event(
-                context,
-                event_type="graph_unhandled_state",
-                summary=f"{context.handler_name} was selected but no runtime adapter was provided",
-            )
-            return None
-
-        if context.handler_name == "BattleHandler":
-            session_result = self._battle_subagent.run(state, runtime)
-            return GraphExecutionResult(
-                handled=session_result.handled,
-                commands=None,
-                final_state=session_result.final_state,
-                battle_session=session_result,
-            )
-
-        if context.handler_name == "CampfireHandler":
-            campfire_session = self._campfire_subagent.run(state, runtime)
-            return GraphExecutionResult(
-                handled=campfire_session.handled,
-                commands=None,
-                final_state=campfire_session.final_state,
-                campfire_session=campfire_session,
-            )
-
-        if context.handler_name == "CombatRewardHandler":
-            reward_session = self._combat_reward_subagent.run(state, runtime)
-            return GraphExecutionResult(
-                handled=reward_session.handled,
-                commands=None,
-                final_state=reward_session.final_state,
-                reward_session=reward_session,
-            )
-
-        if context.handler_name == "BossRewardHandler":
-            reward_session = self._boss_reward_subagent.run(state, runtime)
-            return GraphExecutionResult(
-                handled=reward_session.handled,
-                commands=None,
-                final_state=reward_session.final_state,
-                reward_session=reward_session,
-            )
-
-        reward_session = self._astrolabe_transform_subagent.run(state, runtime)
+        session = self._action_executor.execute(state, runtime)
         return GraphExecutionResult(
-            handled=reward_session.handled,
-            commands=None,
-            final_state=reward_session.final_state,
-            reward_session=reward_session,
+            handled=session.handled,
+            commands=session.commands,
+            final_state=session.final_state,
+            battle_session=session.battle_session,
+            reward_session=session.reward_session,
+            campfire_session=None,
         )
 
     def get_compiled_graph(self) -> Any:
@@ -388,6 +361,7 @@ class AIPlayerGraph:
             graph.add_node("decide_shop", self._decide_shop_node)
             graph.add_node("decide_card_reward", self._decide_card_reward_node)
             graph.add_node("decide_map", self._decide_map_node)
+            graph.add_node("decide_generic", self._decide_generic_node)
             graph.add_node("decide_fallback", self._decide_fallback_node)
             graph.add_node("validate_decision", self._validate_decision_node)
             graph.add_node("commit_short_term_memory", self._commit_short_term_memory_node)
@@ -404,6 +378,7 @@ class AIPlayerGraph:
                     "decide_shop": "decide_shop",
                     "decide_card_reward": "decide_card_reward",
                     "decide_map": "decide_map",
+                    "decide_generic": "decide_generic",
                     "decide_fallback": "decide_fallback",
                 },
             )
@@ -411,6 +386,7 @@ class AIPlayerGraph:
             graph.add_edge("decide_shop", "validate_decision")
             graph.add_edge("decide_card_reward", "validate_decision")
             graph.add_edge("decide_map", "validate_decision")
+            graph.add_edge("decide_generic", "validate_decision")
             graph.add_edge("decide_fallback", "validate_decision")
             graph.add_edge("validate_decision", "commit_short_term_memory")
             graph.add_edge("commit_short_term_memory", "emit_commands")
@@ -606,16 +582,35 @@ class AIPlayerGraph:
             and len(state.get_choice_list()) <= 1
         )
 
+    def _deterministic_single_choice_commands(self, state: GameState) -> list[str] | None:
+        if not state.has_command(Command.CHOOSE):
+            return None
+        if len(state.get_choice_list()) != 1:
+            return None
+        return ["choose 0"]
+
     def _is_runtime_subagent_scope(self, state: GameState) -> bool:
         return (
             state.screen_type() == ScreenType.REST.value
             or
             state.screen_type() == ScreenType.COMBAT_REWARD.value
             or state.screen_type() == ScreenType.BOSS_REWARD.value
+            or state.screen_type() == ScreenType.CHEST.value
+            or state.screen_type() == ScreenType.GRID.value
+            or state.screen_type() == ScreenType.HAND_SELECT.value
             or is_astrolabe_transform_state(state)
         )
 
     def _build_context(self, state: GameState) -> AgentContext | None:
+        if state.screen_type() == ScreenType.HAND_SELECT.value:
+            return build_generic_unhandled_agent_context(state, "HandSelectHandler")
+
+        if state.screen_type() == ScreenType.GRID.value and not is_astrolabe_transform_state(state):
+            return build_generic_unhandled_agent_context(state, "GridSelectHandler")
+
+        if state.screen_type() == ScreenType.CHEST.value:
+            return build_generic_unhandled_agent_context(state, "ChestHandler")
+
         if is_battle_scope_state(state):
             return build_battle_agent_context(state, "BattleHandler")
 
@@ -647,7 +642,27 @@ class AIPlayerGraph:
         if state.screen_type() == ScreenType.MAP.value and state.has_command(Command.CHOOSE):
             return build_map_agent_context(state, "MapHandler", self._map_handler_config)
 
-        return None
+        return build_generic_unhandled_agent_context(state, "GenericHandler")
+
+    def _build_generic_context(self, state: GameState, handler_name: str) -> AgentContext:
+        available_commands = state.json.get("available_commands")
+        if not isinstance(available_commands, list):
+            available_commands = []
+        game_state = state.game_state()
+        return AgentContext(
+            handler_name=handler_name,
+            screen_type=state.screen_type(),
+            available_commands=[str(command) for command in available_commands],
+            choice_list=state.get_choice_list().copy(),
+            game_state={
+                "floor": state.floor(),
+                "act": game_state.get("act"),
+                "room_phase": game_state.get("room_phase"),
+                "room_type": game_state.get("room_type"),
+                "character_class": game_state.get("class"),
+            },
+            extras={},
+        )
 
     def _serialize_context(self, context: AgentContext) -> Dict[str, Any]:
         return asdict(context)
@@ -757,6 +772,10 @@ class AIPlayerGraph:
             "ShopPurchaseHandler": "decide_shop",
             "CardRewardHandler": "decide_card_reward",
             "MapHandler": "decide_map",
+            "ChestHandler": "decide_generic",
+            "GridSelectHandler": "decide_generic",
+            "HandSelectHandler": "decide_generic",
+            "GenericHandler": "decide_generic",
         }
         result = {"route_name": route_map.get(str(state.get("handler_name", "")), "decide_fallback")}
         self._trace_state_event(
@@ -774,42 +793,56 @@ class AIPlayerGraph:
     def _decide_event_node(self, state: AIPlayerGraphState) -> Dict[str, Any]:
         self._trace_state_event(state, event_type="node_enter", node_name="decide_event", summary="requesting event proposal")
         decision_context = self._build_decision_context_from_state(state)
-        proposal = self._event_provider.propose(decision_context)
-        result = self._proposal_update(decision_context, proposal.proposed_command, proposal.confidence, proposal.explanation, proposal.metadata)
+        proposal, proposal_validated, validation_feedback = self._propose_with_validation_retry(decision_context, self._event_provider)
+        result = self._proposal_result_after_retry(
+            decision_context,
+            proposal,
+            proposal_validated,
+            validation_feedback,
+            failure_code="event_validation_failed_after_retries",
+        )
         self._trace_context_event(
             decision_context,
             event_type="node_exit",
             thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(decision_context),
             node_name="decide_event",
             route_name=str(state.get("route_name", "")),
-            proposed_command=proposal.proposed_command,
-            confidence=proposal.confidence,
+            proposed_command=proposal.proposed_command if proposal is not None else None,
+            confidence=proposal.confidence if proposal is not None else 0.0,
             summary=(
-                f"proposal={proposal.proposed_command}, confidence={proposal.confidence:.2f}, "
-                f"explanation={self._safe_preview(proposal.explanation, 100)}"
+                f"proposal={(proposal.proposed_command if proposal is not None else None)}, "
+                f"confidence={(proposal.confidence if proposal is not None else 0.0):.2f}, "
+                f"explanation={self._safe_preview((proposal.explanation if proposal is not None else ''), 100)}"
             ),
-            metadata={"provider_metadata": dict(proposal.metadata)},
+            metadata={"provider_metadata": dict(proposal.metadata) if proposal is not None else {}},
         )
         return result
 
     def _decide_shop_node(self, state: AIPlayerGraphState) -> Dict[str, Any]:
         self._trace_state_event(state, event_type="node_enter", node_name="decide_shop", summary="requesting shop proposal")
         decision_context = self._build_decision_context_from_state(state)
-        proposal = self._shop_provider.propose(decision_context)
-        result = self._proposal_update(decision_context, proposal.proposed_command, proposal.confidence, proposal.explanation, proposal.metadata)
+        proposal, proposal_validated, validation_feedback = self._propose_with_validation_retry(decision_context, self._shop_provider)
+        result = self._proposal_result_after_retry(
+            decision_context,
+            proposal,
+            proposal_validated,
+            validation_feedback,
+            failure_code="shop_validation_failed_after_retries",
+        )
         self._trace_context_event(
             decision_context,
             event_type="node_exit",
             thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(decision_context),
             node_name="decide_shop",
             route_name=str(state.get("route_name", "")),
-            proposed_command=proposal.proposed_command,
-            confidence=proposal.confidence,
+            proposed_command=proposal.proposed_command if proposal is not None else None,
+            confidence=proposal.confidence if proposal is not None else 0.0,
             summary=(
-                f"proposal={proposal.proposed_command}, confidence={proposal.confidence:.2f}, "
-                f"explanation={self._safe_preview(proposal.explanation, 100)}"
+                f"proposal={(proposal.proposed_command if proposal is not None else None)}, "
+                f"confidence={(proposal.confidence if proposal is not None else 0.0):.2f}, "
+                f"explanation={self._safe_preview((proposal.explanation if proposal is not None else ''), 100)}"
             ),
-            metadata={"provider_metadata": dict(proposal.metadata)},
+            metadata={"provider_metadata": dict(proposal.metadata) if proposal is not None else {}},
         )
         return result
 
@@ -821,44 +854,167 @@ class AIPlayerGraph:
             summary="requesting card reward proposal",
         )
         decision_context = self._build_decision_context_from_state(state)
-        proposal = self._card_reward_provider.propose(decision_context)
-        result = self._proposal_update(decision_context, proposal.proposed_command, proposal.confidence, proposal.explanation, proposal.metadata)
+        proposal, proposal_validated, validation_feedback = self._propose_with_validation_retry(decision_context, self._card_reward_provider)
+        result = self._proposal_result_after_retry(
+            decision_context,
+            proposal,
+            proposal_validated,
+            validation_feedback,
+            failure_code="card_reward_validation_failed_after_retries",
+        )
         self._trace_context_event(
             decision_context,
             event_type="node_exit",
             thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(decision_context),
             node_name="decide_card_reward",
             route_name=str(state.get("route_name", "")),
-            proposed_command=proposal.proposed_command,
-            confidence=proposal.confidence,
+            proposed_command=proposal.proposed_command if proposal is not None else None,
+            confidence=proposal.confidence if proposal is not None else 0.0,
             summary=(
-                f"proposal={proposal.proposed_command}, confidence={proposal.confidence:.2f}, "
-                f"explanation={self._safe_preview(proposal.explanation, 100)}"
+                f"proposal={(proposal.proposed_command if proposal is not None else None)}, "
+                f"confidence={(proposal.confidence if proposal is not None else 0.0):.2f}, "
+                f"explanation={self._safe_preview((proposal.explanation if proposal is not None else ''), 100)}"
             ),
-            metadata={"provider_metadata": dict(proposal.metadata)},
+            metadata={"provider_metadata": dict(proposal.metadata) if proposal is not None else {}},
         )
         return result
 
     def _decide_map_node(self, state: AIPlayerGraphState) -> Dict[str, Any]:
         self._trace_state_event(state, event_type="node_enter", node_name="decide_map", summary="requesting map proposal")
         decision_context = self._build_decision_context_from_state(state)
-        proposal = self._map_provider.propose(decision_context)
-        result = self._proposal_update(decision_context, proposal.proposed_command, proposal.confidence, proposal.explanation, proposal.metadata)
+        proposal, proposal_validated, validation_feedback = self._propose_with_validation_retry(decision_context, self._map_provider)
+        result = self._proposal_result_after_retry(
+            decision_context,
+            proposal,
+            proposal_validated,
+            validation_feedback,
+            failure_code="map_validation_failed_after_retries",
+        )
         self._trace_context_event(
             decision_context,
             event_type="node_exit",
             thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(decision_context),
             node_name="decide_map",
             route_name=str(state.get("route_name", "")),
-            proposed_command=proposal.proposed_command,
-            confidence=proposal.confidence,
+            proposed_command=proposal.proposed_command if proposal is not None else None,
+            confidence=proposal.confidence if proposal is not None else 0.0,
             summary=(
-                f"proposal={proposal.proposed_command}, confidence={proposal.confidence:.2f}, "
-                f"explanation={self._safe_preview(proposal.explanation, 100)}"
+                f"proposal={(proposal.proposed_command if proposal is not None else None)}, "
+                f"confidence={(proposal.confidence if proposal is not None else 0.0):.2f}, "
+                f"explanation={self._safe_preview((proposal.explanation if proposal is not None else ''), 100)}"
             ),
-            metadata={"provider_metadata": dict(proposal.metadata)},
+            metadata={"provider_metadata": dict(proposal.metadata) if proposal is not None else {}},
         )
         return result
+
+    def _decide_generic_node(self, state: AIPlayerGraphState) -> Dict[str, Any]:
+        self._trace_state_event(state, event_type="node_enter", node_name="decide_generic", summary="requesting generic proposal")
+        decision_context = self._build_decision_context_from_state(state)
+        proposal, proposal_validated, validation_feedback = self._propose_with_validation_retry(decision_context, self._generic_provider)
+        result = self._proposal_result_after_retry(
+            decision_context,
+            proposal,
+            proposal_validated,
+            validation_feedback,
+            failure_code="generic_validation_failed_after_retries",
+        )
+
+        self._trace_context_event(
+            decision_context,
+            event_type="node_exit",
+            thread_id=str(state.get("run_id", "")) or self._resolve_thread_id(decision_context),
+            node_name="decide_generic",
+            route_name=str(state.get("route_name", "")),
+            proposed_command=proposal.proposed_command if proposal is not None else None,
+            confidence=proposal.confidence if proposal is not None else 0.0,
+            summary=(
+                f"proposal={(proposal.proposed_command if proposal is not None else None)}, "
+                f"confidence={(proposal.confidence if proposal is not None else 0.0):.2f}, "
+                f"explanation={self._safe_preview((proposal.explanation if proposal is not None else ''), 100)}"
+            ),
+            metadata={"provider_metadata": dict(proposal.metadata) if proposal is not None else {}},
+        )
+        return result
+
+    def _propose_with_optional_feedback(
+            self,
+            provider: Any,
+            decision_context: AgentContext,
+            validation_feedback: Dict[str, Any] | None,
+    ) -> Any:
+        try:
+            return provider.propose(
+                decision_context,
+                validation_feedback=validation_feedback,
+            )
+        except TypeError:
+            return provider.propose(decision_context)
+
+    def _propose_with_validation_retry(
+            self,
+            decision_context: AgentContext,
+            provider: Any,
+            *,
+            max_attempts: int = 3,
+    ) -> tuple[Any, bool, Dict[str, Any] | None]:
+        validation_feedback: Dict[str, Any] | None = None
+        proposal = None
+        proposal_validated = False
+
+        for _ in range(max_attempts):
+            proposal = self._propose_with_optional_feedback(provider, decision_context, validation_feedback)
+            if proposal is None:
+                break
+            proposed_command = proposal.proposed_command
+            if proposed_command is None:
+                proposal_validated = True
+                break
+
+            validation, feedback = validate_proposed_command(decision_context, proposed_command)
+            if validation.is_valid:
+                proposal_validated = True
+                break
+            validation_feedback = feedback
+
+        return proposal, proposal_validated, validation_feedback
+
+    def _proposal_result_after_retry(
+            self,
+            decision_context: AgentContext,
+            proposal: Any,
+            proposal_validated: bool,
+            validation_feedback: Dict[str, Any] | None,
+            *,
+            failure_code: str,
+    ) -> Dict[str, Any]:
+        if proposal is None:
+            return self._proposal_update(
+                decision_context,
+                None,
+                0.0,
+                "provider_unavailable",
+                {"validation_error": "provider_unavailable"},
+            )
+
+        if not proposal_validated and validation_feedback is not None and proposal.proposed_command is not None:
+            metadata = dict(getattr(proposal, "metadata", {}))
+            metadata["validation_feedback"] = dict(validation_feedback)
+            metadata["validation_error"] = failure_code
+            return self._proposal_update(
+                decision_context,
+                None,
+                0.0,
+                failure_code,
+                metadata,
+            )
+
+        return self._proposal_update(
+            decision_context,
+            proposal.proposed_command,
+            proposal.confidence,
+            proposal.explanation,
+            proposal.metadata,
+        )
 
     def _decide_fallback_node(self, _state: AIPlayerGraphState) -> Dict[str, Any]:
         self._trace_state_event(
@@ -971,13 +1127,14 @@ class AIPlayerGraph:
             )
             return result
 
-        commands = self._commands_for_context(decision_context, proposed_command)
+        resolution = self._action_policy.resolve(decision_context, proposed_command)
+        commands = resolution.commands
         if commands is None:
-            metadata["validation_error"] = "unsupported_command_mapping"
+            metadata["validation_error"] = resolution.validation.code
             result = {
                 "decision_valid": False,
-                "validation_code": "unsupported_command_mapping",
-                "validation_message": "no execution mapping for validated command",
+                "validation_code": resolution.validation.code,
+                "validation_message": resolution.validation.message,
                 "commands": None,
                 "metadata": metadata,
                 "decision_context_payload": self._serialize_context(decision_context),
@@ -989,10 +1146,10 @@ class AIPlayerGraph:
                 node_name="validate_decision",
                 route_name=str(state.get("route_name", "")),
                 decision_valid=False,
-                validation_code="unsupported_command_mapping",
+                validation_code=resolution.validation.code,
                 proposed_command=proposed_command,
                 confidence=confidence,
-                summary="validation failed: no execution mapping for command",
+                summary=f"validation failed: {self._safe_preview(resolution.validation.message, 120)}",
                 metadata=metadata,
             )
             return result
@@ -1184,38 +1341,71 @@ class AIPlayerGraph:
         trimmed = [dict(entry) for entry in recent_key_decisions if isinstance(entry, dict)]
         return trimmed[-5:]
 
-    def _commands_for_context(self, context: AgentContext, proposed_command: str) -> list[str] | None:
-        if context.handler_name == "EventHandler":
-            return [proposed_command, "wait 30"]
+    def run(self, state: GameState, runtime: BattleRuntimeAdapter) -> ActionExecutionResult:
+        context = self._build_context(state)
+        if context is None:
+            return ActionExecutionResult(handled=False, final_state=runtime.current_state())
 
-        if context.handler_name == "ShopPurchaseHandler":
-            if proposed_command == "return":
-                return ["return", "proceed"]
-            return [proposed_command, "wait 30"]
-
-        if context.handler_name == "CardRewardHandler":
-            return [proposed_command, "wait 30"]
-
-        if context.handler_name == "MapHandler":
-            return [proposed_command]
+        if context.handler_name == "BattleHandler":
+            session_result = self._battle_subagent.run(state, runtime)
+            return ActionExecutionResult(
+                handled=session_result.handled,
+                final_state=session_result.final_state,
+                battle_session=session_result,
+                steps=session_result.steps,
+                summary=session_result.summary,
+            )
 
         if context.handler_name == "CampfireHandler":
-            return [proposed_command]
+            campfire_session = self._campfire_subagent.run(state, runtime)
+            return ActionExecutionResult(
+                handled=campfire_session.handled,
+                final_state=campfire_session.final_state,
+                steps=campfire_session.steps,
+                summary=campfire_session.summary,
+            )
 
         if context.handler_name == "CombatRewardHandler":
-            if proposed_command.startswith("potion use ") or proposed_command.startswith("potion discard "):
-                return ["wait 30", proposed_command]
-            return [proposed_command]
+            reward_session = self._combat_reward_subagent.run(state, runtime)
+            return ActionExecutionResult(
+                handled=reward_session.handled,
+                final_state=reward_session.final_state,
+                reward_session=reward_session,
+                steps=reward_session.steps,
+                summary=reward_session.summary,
+            )
 
         if context.handler_name == "BossRewardHandler":
-            if proposed_command == "skip":
-                return ["skip", "proceed"]
-            return [proposed_command]
+            reward_session = self._boss_reward_subagent.run(state, runtime)
+            return ActionExecutionResult(
+                handled=reward_session.handled,
+                final_state=reward_session.final_state,
+                reward_session=reward_session,
+                steps=reward_session.steps,
+                summary=reward_session.summary,
+            )
 
         if context.handler_name == "AstrolabeTransformHandler":
-            return [proposed_command]
+            reward_session = self._astrolabe_transform_subagent.run(state, runtime)
+            return ActionExecutionResult(
+                handled=reward_session.handled,
+                final_state=reward_session.final_state,
+                reward_session=reward_session,
+                steps=reward_session.steps,
+                summary=reward_session.summary,
+            )
 
-        return None
+        commands = self.decide(runtime.current_state())
+        if commands is None:
+            return ActionExecutionResult(handled=False, final_state=runtime.current_state())
+        final_state = runtime.execute(commands)
+        return ActionExecutionResult(
+            handled=True,
+            final_state=final_state,
+            commands=None,
+            steps=1,
+            summary="graph_decide_then_execute",
+        )
 
     def _coerce_int(self, value: Any) -> int | None:
         try:

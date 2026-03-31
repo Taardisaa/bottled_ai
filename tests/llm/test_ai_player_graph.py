@@ -9,6 +9,7 @@ from rs.llm.battle_runtime import BattleSessionResult
 from rs.llm.campfire_subagent import CampfireSessionResult
 from rs.llm.config import LlmConfig
 from rs.llm.reward_subagent import RewardSessionResult
+from rs.machine.state import GameState
 from test_helpers.resources import load_resource_state
 
 
@@ -115,6 +116,74 @@ class StaticProposalProvider:
             explanation=self.explanation,
             metadata={"provider": "static"},
         )
+
+
+class ScriptedGenericProposalProvider:
+    def __init__(self, commands: list[str | None]):
+        self.commands = list(commands)
+        self.feedbacks = []
+        self.calls = 0
+
+    def propose(self, context, validation_feedback=None):
+        self.feedbacks.append(validation_feedback)
+        command = self.commands[min(self.calls, len(self.commands) - 1)]
+        self.calls += 1
+        return SimpleNamespace(
+            proposed_command=command,
+            confidence=0.95,
+            explanation="scripted",
+            metadata={"provider": "scripted-generic", "calls": self.calls},
+        )
+
+
+class ScriptedProposalProvider:
+    def __init__(self, commands: list[str | None]):
+        self.commands = list(commands)
+        self.feedbacks = []
+        self.calls = 0
+
+    def propose(self, context, validation_feedback=None):
+        self.feedbacks.append(validation_feedback)
+        command = self.commands[min(self.calls, len(self.commands) - 1)]
+        self.calls += 1
+        return SimpleNamespace(
+            proposed_command=command,
+            confidence=0.95,
+            explanation="scripted",
+            metadata={"provider": "scripted", "calls": self.calls},
+        )
+
+
+def _build_unhandled_state() -> GameState:
+    return GameState(
+        {
+            "available_commands": ["confirm", "cancel", "wait", "state"],
+            "ready_for_command": True,
+            "in_game": True,
+            "game_state": {
+                "screen_type": "NONE",
+                "screen_name": "NONE",
+                "screen_state": {},
+                "choice_list": [],
+                "floor": 5,
+                "act": 1,
+                "room_phase": "COMPLETE",
+                "room_type": "EventRoom",
+                "class": "WATCHER",
+                "ascension_level": 0,
+                "current_hp": 60,
+                "max_hp": 72,
+                "gold": 99,
+                "deck": [],
+                "relics": [],
+                "potions": [],
+                "map": [],
+                "keys": {"emerald": False, "ruby": False, "sapphire": False},
+                "action_phase": "WAITING_ON_USER",
+                "is_screen_up": False,
+            },
+        }
+    )
 
 
 class TestAIPlayerGraph(unittest.TestCase):
@@ -233,6 +302,26 @@ class TestAIPlayerGraph(unittest.TestCase):
         self.assertEqual([["choose 0"]], runtime.commands)
         self.assertEqual(1, len(reward_subagent.calls))
 
+    def test_card_reward_state_uses_card_reward_provider_not_combat_subagent(self):
+        reward_subagent = FakeRewardSubagent(["choose 0"])
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+            combat_reward_subagent=reward_subagent,
+        )
+        graph._card_reward_provider = StaticProposalProvider("choose 0")
+
+        state = load_resource_state("/card_reward/card_reward_take.json")
+        commands = graph.decide(state)
+
+        self.assertEqual(["choose 0", "wait 30"], commands)
+        self.assertEqual(0, len(reward_subagent.calls))
+
     def test_campfire_state_is_routed_to_campfire_subagent(self):
         campfire_subagent = FakeCampfireSubagent(["choose rest"])
         graph = AIPlayerGraph(
@@ -317,7 +406,53 @@ class TestAIPlayerGraph(unittest.TestCase):
         self.assertEqual([["choose 2"]], runtime.commands)
         self.assertEqual(1, len(reward_subagent.calls))
 
-    def test_single_choice_choose_state_is_not_handled_by_unified_graph(self):
+    def test_chest_state_is_handled_by_unified_executor(self):
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+        )
+        graph._generic_provider = StaticProposalProvider("choose 0")
+        state = load_resource_state("/other/chest_medium_reward.json")
+        next_state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeBattleRuntime(state, next_state)
+
+        self.assertTrue(graph.can_handle(state))
+        result = graph.execute(state, runtime=runtime)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual([["choose 0"]], runtime.commands)
+        self.assertEqual("CARD_REWARD", result.final_state.screen_type())
+
+    def test_hand_select_state_is_handled_by_unified_executor(self):
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+        )
+        graph._generic_provider = StaticProposalProvider("choose 0")
+        state = load_resource_state("/other/discard_relic.json")
+        next_state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeBattleRuntime(state, next_state)
+
+        self.assertTrue(graph.can_handle(state))
+        result = graph.execute(state, runtime=runtime)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual([["choose 0"]], runtime.commands)
+        self.assertEqual("CARD_REWARD", result.final_state.screen_type())
+
+    def test_single_choice_choose_state_is_handled_deterministically(self):
         graph = AIPlayerGraph(
             config=LlmConfig(
                 enabled=True,
@@ -331,8 +466,109 @@ class TestAIPlayerGraph(unittest.TestCase):
         state = load_resource_state("/event/divine_fountain.json")
         state.json["game_state"]["choice_list"] = ["leave"]
 
-        self.assertFalse(graph.can_handle(state))
+        self.assertTrue(graph.can_handle(state))
+        self.assertEqual(["choose 0"], graph.decide(state))
+
+    def test_single_choice_choose_state_skips_subagent_runtime_path(self):
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+        )
+
+        state = load_resource_state("/event/divine_fountain.json")
+        state.json["game_state"]["choice_list"] = ["leave"]
+        next_state = load_resource_state("/event/divine_fountain.json")
+        runtime = FakeBattleRuntime(state, next_state)
+
+        result = graph.execute(state, runtime=runtime)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual([["choose 0"]], runtime.commands)
+
+    def test_previously_unhandled_state_routes_to_generic_handler(self):
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+        )
+        graph._generic_provider = StaticProposalProvider("confirm")
+
+        state = _build_unhandled_state()
+        commands = graph.decide(state)
+
+        self.assertTrue(graph.can_handle(state))
+        self.assertEqual(["confirm"], commands)
+
+    def test_generic_handler_invalid_proposal_still_blocked_by_validator(self):
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+        )
+        graph._generic_provider = StaticProposalProvider("choose 99")
+
+        state = _build_unhandled_state()
+
+        self.assertTrue(graph.can_handle(state))
         self.assertIsNone(graph.decide(state))
+
+    def test_generic_handler_retries_with_validation_feedback(self):
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+        )
+        scripted_provider = ScriptedGenericProposalProvider(["choose", "choose 0"])
+        graph._generic_provider = scripted_provider
+
+        state = load_resource_state("/other/discard_relic.json")
+        commands = graph.decide(state)
+
+        self.assertEqual(["choose 0"], commands)
+        self.assertEqual(2, scripted_provider.calls)
+        self.assertIsNone(scripted_provider.feedbacks[0])
+        self.assertIsInstance(scripted_provider.feedbacks[1], dict)
+        self.assertEqual("choose_requires_index", scripted_provider.feedbacks[1].get("code"))
+
+    def test_event_handler_retries_with_validation_feedback(self):
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+        )
+        scripted_provider = ScriptedProposalProvider(["choose", "choose 0"])
+        graph._event_provider = scripted_provider
+
+        state = load_resource_state("/event/divine_fountain.json")
+        commands = graph.decide(state)
+
+        self.assertEqual(["choose 0", "wait 30"], commands)
+        self.assertEqual(2, scripted_provider.calls)
+        self.assertIsNone(scripted_provider.feedbacks[0])
+        self.assertIsInstance(scripted_provider.feedbacks[1], dict)
+        self.assertEqual("choose_requires_index", scripted_provider.feedbacks[1].get("code"))
 
     def test_graph_trace_logs_successful_decision_path(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -386,7 +622,12 @@ class TestAIPlayerGraph(unittest.TestCase):
             event_types = [payload["event_type"] for payload in payloads]
             validation_payloads = [payload for payload in payloads if payload["node_name"] == "validate_decision"]
             self.assertIn("graph_decide_invalid_output", event_types)
-            self.assertTrue(any(payload["validation_code"] == "index_out_of_range" for payload in validation_payloads))
+            self.assertTrue(
+                any(
+                    payload["validation_code"] in {"index_out_of_range", "empty_command"}
+                    for payload in validation_payloads
+                )
+            )
 
 
 if __name__ == "__main__":

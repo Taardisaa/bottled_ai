@@ -1,10 +1,5 @@
 enabled: true
-enabled_handlers:
-  - EventHandler
-  - ShopPurchaseHandler
-  - CardRewardHandler
-  - MapHandler
-  - BattleHandler
+enabled_handlers: []
 timeout_ms: -1
 max_retries: 1
 confidence_threshold: 0.0

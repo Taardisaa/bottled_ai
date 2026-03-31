@@ -35,8 +35,12 @@ class MapLlmProvider:
         self.model = config.fast_llm_model if model is None else model
         self.temperature = temperature
 
-    def propose(self, context: AgentContext) -> MapLlmProposal:
-        prompt = self._build_prompt(context)
+    def propose(
+            self,
+            context: AgentContext,
+            validation_feedback: Dict[str, Any] | None = None,
+    ) -> MapLlmProposal:
+        prompt = self._build_prompt(context, validation_feedback)
         try:
             from rs.utils.llm_utils import ask_llm_once
         except Exception as e:
@@ -93,7 +97,11 @@ class MapLlmProvider:
             },
         )
 
-    def _build_prompt(self, context: AgentContext) -> str:
+    def _build_prompt(
+            self,
+            context: AgentContext,
+            validation_feedback: Dict[str, Any] | None = None,
+    ) -> str:
         map_options_text = self._format_choice_list(context.choice_list)
         choice_branch_summaries_text = self._format_choice_branch_summaries(
             context.extras.get("choice_branch_summaries", []),
@@ -109,6 +117,13 @@ class MapLlmProvider:
             "Retrieved semantic memories",
             context.extras.get("retrieved_semantic_memories", "none"),
         )
+        validation_feedback_block = ""
+        if validation_feedback is not None:
+            validation_feedback_block = (
+                "Validation feedback from previous rejected proposal:\n"
+                f"{json.dumps(validation_feedback, sort_keys=True)}\n"
+                "If feedback is present, correct the command to satisfy it.\n"
+            )
         return PROMPT_TEMPLATE.format(
             map_options_text=map_options_text,
             floor=context.game_state.get("floor", "unknown"),
@@ -130,6 +145,7 @@ class MapLlmProvider:
             deterministic_best_command=context.extras.get("deterministic_best_command", "unknown"),
             choice_branch_summaries_text=choice_branch_summaries_text,
             choice_representative_paths_text=choice_representative_paths_text,
+            validation_feedback_block=validation_feedback_block,
         )
 
     def _format_choice_list(self, choice_list: list[Any]) -> str:

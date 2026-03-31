@@ -36,8 +36,12 @@ class CardRewardLlmProvider:
         self.model = config.fast_llm_model if model is None else model
         self.temperature = temperature
 
-    def propose(self, context: AgentContext) -> CardRewardLlmProposal:
-        prompt = self._build_prompt(context)
+    def propose(
+            self,
+            context: AgentContext,
+            validation_feedback: Dict[str, Any] | None = None,
+    ) -> CardRewardLlmProposal:
+        prompt = self._build_prompt(context, validation_feedback)
         try:
             from rs.utils.llm_utils import ask_llm_once
         except Exception as e:
@@ -95,7 +99,11 @@ class CardRewardLlmProvider:
             },
         )
 
-    def _build_prompt(self, context: AgentContext) -> str:
+    def _build_prompt(
+            self,
+            context: AgentContext,
+            validation_feedback: Dict[str, Any] | None = None,
+    ) -> str:
         floor = context.game_state.get("floor", "unknown")
         act = context.game_state.get("act", "unknown")
         hp = context.game_state.get("current_hp", "unknown")
@@ -118,6 +126,13 @@ class CardRewardLlmProvider:
         reward_screen_flags = context.extras.get("reward_screen_flags", {})
         card_details = self._build_card_details(context)
         reward_options_text = self._format_reward_options(choice_card_summaries, context.choice_list)
+        validation_feedback_block = ""
+        if validation_feedback is not None:
+            validation_feedback_block = (
+                "Validation feedback from previous rejected proposal:\n"
+                f"{json.dumps(validation_feedback, sort_keys=True)}\n"
+                "If feedback is present, correct the command to satisfy it.\n"
+            )
 
         return PROMPT_TEMPLATE.format(
             reward_options_text=reward_options_text,
@@ -140,6 +155,7 @@ class CardRewardLlmProvider:
             reward_screen_flags=json.dumps(reward_screen_flags, sort_keys=True),
             choice_card_details=json.dumps(card_details["choice"], sort_keys=True),
             deck_card_details=json.dumps(card_details["deck"], sort_keys=True),
+            validation_feedback_block=validation_feedback_block,
         )
 
     def _format_reward_options(self, choice_card_summaries: list[dict[str, Any]], choice_list: list[Any]) -> str:

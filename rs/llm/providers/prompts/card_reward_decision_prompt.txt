@@ -10,6 +10,8 @@ Rules:
 - Use the literal command "skip" when skipping is the best choice and skip is available.
 - Use provided card details and current deck/hand context to evaluate synergy before deciding to skip.
 - Do not default to 'skip' only because card names are unfamiliar.
+- Deck has no hard card-count cap; never justify `skip` by saying the deck is \"full\".
+- Treat "deck is full" / "too many cards" as invalid reasoning; if you skip, justify by concrete tempo/synergy/value tradeoffs instead.
 - Ignore protocol-only commands like key, click, state, and bare wait unless the prompt explicitly requires them.
 - If uncertain, set proposed_command to null and low confidence.
 
@@ -29,3 +31,4 @@ Choice card summaries: {choice_card_summaries}
 Reward screen flags: {reward_screen_flags}
 Choice card details (stsdb): {choice_card_details}
 Deck card details (stsdb subset): {deck_card_details}
+{validation_feedback_block}

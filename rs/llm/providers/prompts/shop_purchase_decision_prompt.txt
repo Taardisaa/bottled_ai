@@ -27,3 +27,4 @@ Purge cost: {purge_cost}
 Shop card offers: {shop_card_offers}
 Shop relic offers: {shop_relic_offers}
 Shop potion offers: {shop_potion_offers}
+{validation_feedback_block}

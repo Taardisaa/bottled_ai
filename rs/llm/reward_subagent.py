@@ -20,12 +20,17 @@ from rs.llm.providers.reward_llm_provider import (
     CombatRewardLlmProvider,
     RewardCommandProposal,
 )
-from rs.llm.validator import validate_command
+from rs.llm.subagent_validation_middleware import validate_proposed_command
 from rs.machine.state import GameState
 
 
 class RewardCommandProvider(Protocol):
-    def propose(self, context: AgentContext, working_memory: dict[str, Any]) -> RewardCommandProposal:
+    def propose(
+            self,
+            context: AgentContext,
+            working_memory: dict[str, Any],
+            validation_feedback: dict[str, Any] | None = None,
+    ) -> RewardCommandProposal:
         ...
 
 
@@ -51,6 +56,7 @@ class RewardSubagentState(TypedDict, total=False):
 @dataclass
 class RewardSubagentConfig:
     max_decision_loops: int = 16
+    max_validation_attempts: int = 2
 
 
 @dataclass
@@ -223,6 +229,19 @@ class RewardSubagentBase:
             }
 
         context = state["current_context"]
+        deterministic_proposal = self._deterministic_combat_reward_card_entry(context)
+        if deterministic_proposal is not None:
+            working_memory = self._append_step_summary(
+                working_memory,
+                f"deterministic card handoff: {deterministic_proposal.proposed_command}",
+            )
+            return {
+                "working_memory": working_memory,
+                "proposal": deterministic_proposal,
+                "pending_decision_explanation": deterministic_proposal.explanation,
+                "pending_decision_confidence": deterministic_proposal.confidence,
+            }
+
         proposal = self._provider.propose(context, working_memory)
         return {
             "working_memory": working_memory,
@@ -237,30 +256,77 @@ class RewardSubagentBase:
             return {"pending_commands": []}
 
         context = state["current_context"]
-        proposed_command = str(proposal.proposed_command).strip()
         working_memory = dict(state.get("working_memory", {}))
+        latest_explanation = str(state.get("pending_decision_explanation", proposal.explanation))
+        latest_confidence = float(state.get("pending_decision_confidence", proposal.confidence))
 
-        if self._uses_duplicate_choice_token(context, proposed_command):
+        for attempt in range(self._config.max_validation_attempts):
+            proposed_command = str(proposal.proposed_command).strip()
+            is_deterministic_card_handoff = (
+                str(proposal.metadata.get("reason", "")) == "deterministic_card_handoff"
+            )
+
+            feedback: dict[str, Any] | None = None
+            if self._uses_duplicate_choice_token(context, proposed_command):
+                feedback = {
+                    "rejected_command": proposed_command,
+                    "code": "choose_requires_index",
+                    "message": "ambiguous choose token detected",
+                    "corrective_hint": "choose must use index form `choose <index>`.",
+                    "valid_index_range": f"0..{max(0, len(context.choice_list) - 1)}",
+                    "valid_example": "choose 0" if context.choice_list else "none",
+                }
+            elif not is_deterministic_card_handoff and self._is_card_row_choice(context, proposed_command):
+                feedback = {
+                    "rejected_command": proposed_command,
+                    "code": "card_row_handoff_required",
+                    "message": "card row should be delegated through deterministic handoff",
+                    "corrective_hint": "choose must target non-card reward row, or return null if no non-card action.",
+                    "valid_index_range": f"0..{max(0, len(context.choice_list) - 1)}",
+                    "valid_example": "choose 0" if context.choice_list else "none",
+                }
+            else:
+                validation, feedback = validate_proposed_command(context, proposed_command)
+                if validation.is_valid:
+                    commands = self._commands_for_context(context, proposed_command)
+                    if commands is not None:
+                        return {
+                            "pending_commands": commands,
+                            "working_memory": working_memory,
+                            "pending_decision_explanation": latest_explanation,
+                            "pending_decision_confidence": latest_confidence,
+                        }
+                    feedback = {
+                        "rejected_command": proposed_command,
+                        "code": "no_execution_mapping",
+                        "message": f"no execution mapping for {proposed_command}",
+                        "corrective_hint": "return one command compatible with current handler mapping.",
+                        "valid_index_range": f"0..{max(0, len(context.choice_list) - 1)}",
+                        "valid_example": "choose 0" if context.choice_list else "none",
+                    }
+
+            feedback_payload = dict(feedback or {})
             working_memory = self._append_step_summary(
                 working_memory,
-                f"rejected ambiguous token command: {proposed_command}",
+                f"validation failed for {proposed_command}: {feedback_payload.get('code', 'unknown')}",
             )
-            return {"pending_commands": [], "working_memory": working_memory}
+            if attempt + 1 >= self._config.max_validation_attempts:
+                return {"pending_commands": [], "working_memory": working_memory}
 
-        validation = validate_command(context, proposed_command)
-        if not validation.is_valid:
-            working_memory = self._append_step_summary(
+            proposal = self._provider.propose(
+                context,
                 working_memory,
-                f"validation failed for {proposed_command}: {validation.code}",
+                validation_feedback=feedback_payload,
             )
-            return {"pending_commands": [], "working_memory": working_memory}
+            latest_explanation = str(proposal.explanation)
+            try:
+                latest_confidence = float(proposal.confidence)
+            except (TypeError, ValueError):
+                latest_confidence = 0.0
+            if proposal.proposed_command is None:
+                break
 
-        commands = self._commands_for_context(context, proposed_command)
-        if commands is None:
-            working_memory = self._append_step_summary(working_memory, f"no execution mapping for {proposed_command}")
-            return {"pending_commands": [], "working_memory": working_memory}
-
-        return {"pending_commands": commands}
+        return {"pending_commands": [], "working_memory": working_memory}
 
     def _action_commit_node(self, state: RewardSubagentState) -> dict[str, Any]:
         commands = [str(command).strip() for command in state.get("pending_commands", []) if str(command).strip()]
@@ -392,6 +458,42 @@ class RewardSubagentBase:
 
         matches = [token for token in context.choice_list if str(token).strip().lower() == choice]
         return len(matches) > 1
+
+    def _is_card_row_choice(self, context: AgentContext, proposed_command: str) -> bool:
+        if context.handler_name != "CombatRewardHandler":
+            return False
+        tokens = proposed_command.split()
+        if len(tokens) != 2 or tokens[0] != "choose":
+            return False
+        choice = tokens[1].strip().lower()
+        card_choice_indexes = {
+            int(index)
+            for index in context.extras.get("card_reward_choice_indexes", [])
+            if isinstance(index, int)
+        }
+        card_choice_tokens = {
+            str(token).strip().lower()
+            for token in context.extras.get("card_reward_choice_tokens", [])
+            if str(token).strip() != ""
+        }
+        if choice.isdigit():
+            return int(choice) in card_choice_indexes
+        return choice in card_choice_tokens
+
+    def _deterministic_combat_reward_card_entry(self, context: AgentContext) -> RewardCommandProposal | None:
+        if context.handler_name != "CombatRewardHandler":
+            return None
+        non_card_reward_count = int(context.extras.get("non_card_reward_count", 0))
+        has_card_reward_row = bool(context.extras.get("has_card_reward_row", False))
+        card_choice_index = context.extras.get("card_reward_choice_index")
+        if non_card_reward_count != 0 or not has_card_reward_row or not isinstance(card_choice_index, int):
+            return None
+        return RewardCommandProposal(
+            proposed_command=f"choose {card_choice_index}",
+            confidence=1.0,
+            explanation="deterministic_card_handoff_when_only_card_row_remains",
+            metadata={"reason": "deterministic_card_handoff"},
+        )
 
     @staticmethod
     def _append_step_summary(working_memory: dict[str, Any], summary: str) -> dict[str, Any]:

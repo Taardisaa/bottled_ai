@@ -61,6 +61,8 @@ class TestCardRewardLlmProviderPrompt(unittest.TestCase):
 
         self.assertIn("answer in short plain text using these fields", prompt)
         self.assertIn('choose <index>', prompt)
+        self.assertIn('Deck has no hard card-count cap; never justify `skip` by saying the deck is \\"full\\".', prompt)
+        self.assertIn('Treat "deck is full" / "too many cards" as invalid reasoning;', prompt)
         self.assertIn('- 0 | card="pommel strike"', prompt)
         self.assertIn("Choice card details (stsdb):", prompt)
         self.assertIn("Class: IRONCLAD, Ascension: 5, Act boss: Hexaghost", prompt)

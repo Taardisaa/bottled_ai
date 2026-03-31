@@ -57,6 +57,8 @@ _TOKENIZER_PROVIDER_PREFIXES = {
 }
 
 SECOND_LAYER_THINKING_TOKEN_LIMIT = 1024
+SECOND_LAYER_STRUCT_CONVERT_MAX_RETRIES = 3
+SECOND_LAYER_FIRST_PASS_RESTARTS = 1
 _THINK_BLOCK_PATTERN = re.compile(r"<think>(.*?)</think>", re.IGNORECASE | re.DOTALL)
 
 
@@ -84,13 +86,26 @@ def _has_custom_base_url() -> bool:
 
 
 def _normalize_model_for_litellm(model: str) -> str:
+    normalized = str(model).strip()
     if not _has_custom_base_url():
-        return model
+        return normalized
 
-    if model.startswith("hosted_vllm/") or model.startswith("openai/") or _is_openrouter_model(model):
-        return model
+    # For custom OpenAI-compatible endpoints, keep raw model ids as the default
+    # final request shape. Prefix fallback (openai/<model>) is handled on retry.
+    if _is_openrouter_model(normalized):
+        return normalized
+    return normalized
 
-    return f"hosted_vllm/{model}"
+
+def _finalize_model_before_request(model: str) -> str:
+    normalized = str(model).strip()
+    if not _has_custom_base_url():
+        return normalized
+    if _is_openrouter_model(normalized):
+        return normalized
+    if normalized.startswith("openai/"):
+        return normalized.split("/", 1)[1]
+    return normalized
 
 
 def _provider_name_for_model(model: str) -> str:
@@ -126,6 +141,21 @@ def _safe_preview(value: Any, limit: int = 120) -> str:
     if len(preview) > limit:
         return preview[: limit - 3] + "..."
     return preview
+
+
+def _llm_output_preview(value: Any, limit: int = 2000) -> str:
+    if value is None:
+        return "None"
+    if isinstance(value, BaseModel):
+        text = json.dumps(value.model_dump(), ensure_ascii=False)
+    elif isinstance(value, (dict, list)):
+        text = json.dumps(value, ensure_ascii=False)
+    else:
+        text = str(value)
+    text = text.replace("\r", " ").strip()
+    if len(text) > limit:
+        return text[: limit - 3] + "..."
+    return text
 
 
 def _normalize_model_for_tokenizer(model: str) -> str:
@@ -258,7 +288,8 @@ def _decode_tokens_with_model_tokenizer(token_ids: list[int], model: str, codec_
 
 def _litellm_completion_kwargs(model: str, temperature: float, **extra_kwargs: Any) -> Dict[str, Any]:
     enable_thinking = extra_kwargs.pop("enable_thinking", None)
-    normalized_model = _normalize_model_for_litellm(model)
+    finalized_model = _finalize_model_before_request(model)
+    normalized_model = _normalize_model_for_litellm(finalized_model)
     kwargs: Dict[str, Any] = {
         "model": normalized_model,
         "temperature": temperature,
@@ -306,7 +337,41 @@ def _merge_extra_body(existing: Any, additions: Dict[str, Any]) -> Dict[str, Any
 def _call_litellm_quietly(function: Any, *args: Any, **kwargs: Any) -> Any:
     """Redirect Python-level stdout noise from LiteLLM-compatible libraries to stderr."""
     with redirect_stdout(sys.stderr):
-        return function(*args, **kwargs)
+        try:
+            return function(*args, **kwargs)
+        except Exception as error:
+            if function is completion and _has_custom_base_url():
+                retried_kwargs = _fallback_completion_kwargs_for_model_error(kwargs, error)
+                if retried_kwargs is not None:
+                    return function(*args, **retried_kwargs)
+            raise
+
+
+def _fallback_completion_kwargs_for_model_error(
+        kwargs: Dict[str, Any],
+        error: Exception,
+) -> Dict[str, Any] | None:
+    model = str(kwargs.get("model", "")).strip()
+    if model == "":
+        return None
+    message = str(error).lower()
+
+    # Some custom endpoints/proxies reject raw model ids without provider hint.
+    if "llm provider not provided" in message and "/" not in model:
+        retry_kwargs = dict(kwargs)
+        retry_kwargs["model"] = f"openai/{model}"
+        logger.warning(f"Retrying completion with provider-prefixed model: {retry_kwargs['model']}")
+        return retry_kwargs
+
+    # Some proxies validate model names before provider stripping and only accept
+    # bare ids (e.g. qwen-mlx), so retry once without openai/ prefix.
+    if "invalid model name passed in model=openai/" in message and model.startswith("openai/"):
+        retry_kwargs = dict(kwargs)
+        retry_kwargs["model"] = model.split("/", 1)[1]
+        logger.warning(f"Retrying completion with raw model id: {retry_kwargs['model']}")
+        return retry_kwargs
+
+    return None
 
 
 # TODO: Current impl only supports OpenAI and Anthropic models. Add more providers as needed.
@@ -654,6 +719,113 @@ def _coerce_structured_response(content: Any, struct: LLMAcceptStructParam) -> O
     return None
 
 
+def _extract_json_object_from_text(text: str) -> Optional[dict[str, Any]]:
+    if not isinstance(text, str):
+        return None
+    start = text.find("{")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escaped = False
+    for idx in range(start, len(text)):
+        ch = text[idx]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                candidate = text[start:idx + 1]
+                try:
+                    loaded = json.loads(candidate)
+                except Exception:
+                    return None
+                return loaded if isinstance(loaded, dict) else None
+    return None
+
+
+def _coerce_structured_from_field_lines(
+        text: str,
+        struct: LLMAcceptStructParam,
+) -> Optional[LLMLoadedResponse]:
+    if not isinstance(text, str):
+        return None
+    if not (isinstance(struct, type) and issubclass(struct, BaseModel)):
+        return None
+
+    properties = struct.model_json_schema().get("properties", {})
+    if not isinstance(properties, dict) or not properties:
+        return None
+
+    payload: dict[str, Any] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if ":" not in line:
+            continue
+        field_name, raw_value = line.split(":", 1)
+        field_name = field_name.strip()
+        if field_name not in properties:
+            continue
+        value_text = raw_value.strip()
+        if value_text == "":
+            payload[field_name] = ""
+            continue
+        lowered = value_text.lower()
+        if lowered == "null":
+            payload[field_name] = None
+            continue
+        if lowered == "true":
+            payload[field_name] = True
+            continue
+        if lowered == "false":
+            payload[field_name] = False
+            continue
+        try:
+            payload[field_name] = json.loads(value_text)
+            continue
+        except Exception:
+            payload[field_name] = value_text
+
+    if not payload:
+        return None
+    try:
+        return struct.model_validate(payload)
+    except Exception:
+        return None
+
+
+def _try_coerce_structured_from_text(
+        text: Any,
+        struct: LLMAcceptStructParam,
+) -> Optional[LLMLoadedResponse]:
+    if text is None:
+        return None
+    if not isinstance(text, str):
+        return _coerce_structured_response(text, struct)
+
+    direct = _coerce_structured_response(text, struct)
+    if direct is not None:
+        return direct
+
+    embedded_json = _extract_json_object_from_text(text)
+    if embedded_json is not None:
+        coerced = _coerce_structured_response(embedded_json, struct)
+        if coerced is not None:
+            return coerced
+
+    return _coerce_structured_from_field_lines(text, struct)
+
+
 def _parse_litellm_response(response: Any,
                            struct: Optional[LLMAcceptStructParam]) -> Tuple[Optional[LLMLoadedResponse], int]:
     if hasattr(response, "model_dump"):
@@ -771,44 +943,18 @@ def _ask_llm_once_two_layer(
         struct: LLMAcceptStructParam,
         temperature: float,
 ) -> Tuple[Optional[LLMLoadedResponse], int]:
+    total_tokens = 0
     first_temperature = _normalize_temperature_for_model(model, temperature)
     first_kwargs = _litellm_completion_kwargs(
         model,
         first_temperature,
         enable_thinking=config.llm_enable_thinking,
     )
-    first_raw = _call_litellm_quietly(
-        completion,
-        messages=[{"role": "user", "content": message}],
-        **first_kwargs,
-    )
-
-    if hasattr(first_raw, "model_dump"):
-        first_response_dict = getattr(first_raw, "model_dump")()
-    else:
-        first_response_dict = first_raw
-    if not isinstance(first_response_dict, dict):
-        logger.error("Unexpected LiteLLM first-stage response type")
-        return None, 0
-
-    first_tokens = int(first_response_dict.get("usage", {}).get("total_tokens", 0) or 0)
-    first_content = _extract_litellm_content(first_response_dict)
-    if first_content is None:
-        logger.error("Unexpected LiteLLM response content for first-stage unstructured call")
-        return None, first_tokens
-
-    if isinstance(first_content, (dict, list)):
-        first_content_text = json.dumps(first_content, ensure_ascii=False)
-    else:
-        first_content_text = str(first_content)
-    first_content_text = _truncate_think_blocks_for_second_layer(first_content_text, model)
-
     conversion_model = config.fast_llm_model
     if not _ensure_api_key_for_model(conversion_model):
-        return None, first_tokens
+        return None, 0
 
     second_temperature = _normalize_temperature_for_model(conversion_model, 0.0)
-    second_prompt = _build_struct_convert_prompt(first_content_text, struct)
     second_kwargs = _litellm_completion_kwargs(
         conversion_model,
         second_temperature,
@@ -816,17 +962,82 @@ def _ask_llm_once_two_layer(
         response_format=struct,
     )
 
-    second_raw = _call_litellm_quietly(
-        completion,
-        messages=[{"role": "user", "content": second_prompt}],
-        **second_kwargs,
-    )
-    second_parsed, second_tokens = _parse_litellm_response(second_raw, struct)
-    if second_parsed is None:
-        logger.error("Unexpected LiteLLM response type or failed structured parse in second-stage conversion")
-        return None, first_tokens + second_tokens
+    for first_pass_attempt in range(SECOND_LAYER_FIRST_PASS_RESTARTS + 1):
+        first_raw = _call_litellm_quietly(
+            completion,
+            messages=[{"role": "user", "content": message}],
+            **first_kwargs,
+        )
 
-    return second_parsed, first_tokens + second_tokens
+        if hasattr(first_raw, "model_dump"):
+            first_response_dict = getattr(first_raw, "model_dump")()
+        else:
+            first_response_dict = first_raw
+        if not isinstance(first_response_dict, dict):
+            logger.error("Unexpected LiteLLM first-stage response type")
+            return None, total_tokens
+
+        first_tokens = int(first_response_dict.get("usage", {}).get("total_tokens", 0) or 0)
+        total_tokens += first_tokens
+        first_content = _extract_litellm_content(first_response_dict)
+        if first_content is None:
+            logger.error("Unexpected LiteLLM response content for first-stage unstructured call")
+            if first_pass_attempt < SECOND_LAYER_FIRST_PASS_RESTARTS:
+                logger.warning(
+                    f"Retrying first-stage generation ({first_pass_attempt + 2}/{SECOND_LAYER_FIRST_PASS_RESTARTS + 1}) "
+                    "due to empty first-stage content"
+                )
+                continue
+            return None, total_tokens
+
+        if isinstance(first_content, (dict, list)):
+            first_content_text = json.dumps(first_content, ensure_ascii=False)
+        else:
+            first_content_text = str(first_content)
+        logger.info(
+            "LLM first-pass output preview: "
+            + _llm_output_preview(first_content_text)
+        )
+
+        # Fast-path: if first-pass output already contains parseable structured data
+        # (JSON or key-value fields), skip second-stage conversion entirely.
+        if "<think>" not in first_content_text:
+            first_direct = _try_coerce_structured_from_text(first_content_text, struct)
+            if first_direct is not None:
+                logger.info("Two-layer fast-path accepted first-pass structured output")
+                return first_direct, total_tokens
+
+        first_content_text = _truncate_think_blocks_for_second_layer(first_content_text, model)
+        second_prompt = _build_struct_convert_prompt(first_content_text, struct)
+
+        for attempt in range(SECOND_LAYER_STRUCT_CONVERT_MAX_RETRIES):
+            second_raw = _call_litellm_quietly(
+                completion,
+                messages=[{"role": "user", "content": second_prompt}],
+                **second_kwargs,
+            )
+            second_parsed, second_tokens = _parse_litellm_response(second_raw, struct)
+            total_tokens += second_tokens
+            if second_parsed is not None:
+                return second_parsed, total_tokens
+            second_content = _extract_litellm_content(second_raw)
+            second_fallback = _try_coerce_structured_from_text(second_content, struct)
+            if second_fallback is not None:
+                logger.info("Two-layer fallback recovered structured output from second-pass text")
+                return second_fallback, total_tokens
+            logger.warning(
+                "Second-stage conversion parse failed "
+                f"(attempt {attempt + 1}/{SECOND_LAYER_STRUCT_CONVERT_MAX_RETRIES})"
+            )
+
+        if first_pass_attempt < SECOND_LAYER_FIRST_PASS_RESTARTS:
+            logger.warning(
+                "Second-stage conversion exhausted; rerunning first-stage generation "
+                f"({first_pass_attempt + 2}/{SECOND_LAYER_FIRST_PASS_RESTARTS + 1})"
+            )
+
+    logger.error("Unexpected LiteLLM response type or failed structured parse in second-stage conversion")
+    return None, total_tokens
 
 
 def ask_llm_once(message: str,
@@ -912,6 +1123,10 @@ def ask_llm_once(message: str,
         if response_to_return is None:
             logger.error("Unexpected LiteLLM response type or failed structured parse")
             return None, total_tokens
+        logger.info(
+            "LLM output preview: "
+            + _llm_output_preview(response_to_return)
+        )
 
         # Store response in cache if storing is enabled
         use_cache_store = _is_llm_store_cacheable(struct) and enable_cache

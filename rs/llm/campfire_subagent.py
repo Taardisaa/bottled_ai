@@ -13,12 +13,17 @@ from rs.llm.battle_runtime import BattleRuntimeAdapter
 from rs.llm.integration.campfire_context import build_campfire_agent_context
 from rs.llm.langmem_service import LangMemService, get_langmem_service
 from rs.llm.providers.campfire_llm_provider import CampfireCommandProposal, CampfireLlmProvider
-from rs.llm.validator import validate_command
+from rs.llm.subagent_validation_middleware import validate_proposed_command
 from rs.machine.state import GameState
 
 
 class CampfireCommandProvider(Protocol):
-    def propose(self, context: AgentContext, working_memory: dict[str, Any]) -> CampfireCommandProposal:
+    def propose(
+            self,
+            context: AgentContext,
+            working_memory: dict[str, Any],
+            validation_feedback: dict[str, Any] | None = None,
+    ) -> CampfireCommandProposal:
         ...
 
 
@@ -44,6 +49,7 @@ class CampfireSubagentState(TypedDict, total=False):
 @dataclass
 class CampfireSubagentConfig:
     max_decision_loops: int = 8
+    max_validation_attempts: int = 2
 
 
 @dataclass
@@ -218,25 +224,55 @@ class CampfireSubagent:
             return {"pending_commands": []}
 
         context = state["current_context"]
-        proposed_command = str(proposal.proposed_command).strip()
         working_memory = dict(state.get("working_memory", {}))
+        latest_explanation = str(state.get("pending_decision_explanation", proposal.explanation))
+        latest_confidence = float(state.get("pending_decision_confidence", proposal.confidence))
 
-        if self._uses_duplicate_choice_token(context, proposed_command):
+        for attempt in range(self._config.max_validation_attempts):
+            proposed_command = str(proposal.proposed_command).strip()
+            feedback: dict[str, Any] | None = None
+
+            if self._uses_duplicate_choice_token(context, proposed_command):
+                feedback = {
+                    "rejected_command": proposed_command,
+                    "code": "choose_requires_index",
+                    "message": "ambiguous choose token detected",
+                    "corrective_hint": "choose must use index form `choose <index>`.",
+                    "valid_index_range": f"0..{max(0, len(context.choice_list) - 1)}",
+                    "valid_example": "choose 0" if context.choice_list else "none",
+                }
+            else:
+                validation, feedback = validate_proposed_command(context, proposed_command)
+                if validation.is_valid:
+                    return {
+                        "pending_commands": [proposed_command],
+                        "working_memory": working_memory,
+                        "pending_decision_explanation": latest_explanation,
+                        "pending_decision_confidence": latest_confidence,
+                    }
+
+            feedback_payload = dict(feedback or {})
             working_memory = self._append_step_summary(
                 working_memory,
-                f"rejected ambiguous token command: {proposed_command}",
+                f"validation failed for {proposed_command}: {feedback_payload.get('code', 'unknown')}",
             )
-            return {"pending_commands": [], "working_memory": working_memory}
+            if attempt + 1 >= self._config.max_validation_attempts:
+                return {"pending_commands": [], "working_memory": working_memory}
 
-        validation = validate_command(context, proposed_command)
-        if not validation.is_valid:
-            working_memory = self._append_step_summary(
+            proposal = self._provider.propose(
+                context,
                 working_memory,
-                f"validation failed for {proposed_command}: {validation.code}",
+                validation_feedback=feedback_payload,
             )
-            return {"pending_commands": [], "working_memory": working_memory}
+            latest_explanation = str(proposal.explanation)
+            try:
+                latest_confidence = float(proposal.confidence)
+            except (TypeError, ValueError):
+                latest_confidence = 0.0
+            if proposal.proposed_command is None:
+                break
 
-        return {"pending_commands": [proposed_command]}
+        return {"pending_commands": [], "working_memory": working_memory}
 
     def _action_commit_node(self, state: CampfireSubagentState) -> dict[str, Any]:
         commands = [str(command).strip() for command in state.get("pending_commands", []) if str(command).strip()]

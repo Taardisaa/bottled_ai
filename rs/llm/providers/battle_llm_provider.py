@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 import json
 from typing import Any, Dict, Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from rs.llm.agents.base_agent import AgentContext
 from rs.utils.config import config
@@ -53,6 +53,15 @@ class BattleDirectiveSchema(BaseModel):
     tool_payload: dict[str, Any] = Field(default_factory=dict)
     commands: list[str] = Field(default_factory=list)
 
+    @field_validator("tool_payload", mode="before")
+    @classmethod
+    def _normalize_tool_payload(cls, value: Any) -> dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return value
+        return {}
+
 
 class BattleDirectiveProvider(Protocol):
     def propose(
@@ -60,6 +69,7 @@ class BattleDirectiveProvider(Protocol):
             context: AgentContext,
             working_memory: dict[str, Any],
             tool_descriptions: dict[str, str],
+            validation_feedback: dict[str, Any] | None = None,
     ) -> BattleDirective:
         ...
 
@@ -74,8 +84,9 @@ class BattleLlmProvider:
             context: AgentContext,
             working_memory: dict[str, Any],
             tool_descriptions: dict[str, str],
+            validation_feedback: dict[str, Any] | None = None,
     ) -> BattleDirective:
-        prompt = self._build_prompt(context, working_memory, tool_descriptions)
+        prompt = self._build_prompt(context, working_memory, tool_descriptions, validation_feedback)
         try:
             from rs.utils.llm_utils import ask_llm_once
         except Exception as exc:
@@ -144,6 +155,7 @@ class BattleLlmProvider:
             context: AgentContext,
             working_memory: dict[str, Any],
             tool_descriptions: dict[str, str],
+            validation_feedback: dict[str, Any] | None = None,
     ) -> str:
         payload = {
             "handler_name": context.handler_name,
@@ -168,6 +180,7 @@ class BattleLlmProvider:
                 "recent_tool_results": working_memory.get("recent_tool_results", [])[-4:],
                 "executed_command_batches": working_memory.get("executed_command_batches", [])[-4:],
             },
+            "validation_feedback": dict(validation_feedback or {}),
         }
         return _PROMPT_TEMPLATE.format(
             tool_descriptions=json.dumps(tool_descriptions, ensure_ascii=False, indent=2, sort_keys=True),

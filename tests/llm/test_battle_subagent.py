@@ -54,9 +54,11 @@ class ScriptedBattleProvider:
     def __init__(self, directives):
         self._directives = list(directives)
         self.session_ids = []
+        self.validation_feedbacks = []
 
-    def propose(self, context, working_memory, tool_descriptions):
+    def propose(self, context, working_memory, tool_descriptions, validation_feedback=None):
         self.session_ids.append(context.extras["battle_working_memory"]["session_id"])
+        self.validation_feedbacks.append(dict(validation_feedback or {}))
         if not self._directives:
             return BattleDirective(mode="action", explanation="default_end", confidence=0.5, commands=["end"])
         return self._directives.pop(0)
@@ -179,6 +181,41 @@ class TestBattleSubagent(unittest.TestCase):
         self.assertEqual([["play 1 0"], ["end"]], runtime.command_batches)
         self.assertEqual(2, result.steps)
         self.assertEqual("CARD_REWARD", result.final_state.screen_type())
+
+    def test_subagent_refines_invalid_choose_action_to_valid_indexed_action(self):
+        langmem_service = FakeLangMemService()
+        provider = ScriptedBattleProvider([
+            BattleDirective(mode="action", explanation="bad choose", confidence=0.7, commands=["choose rest"]),
+            BattleDirective(mode="action", explanation="fixed", confidence=0.8, commands=["end"]),
+        ])
+        subagent = build_battle_subagent(provider, langmem_service)
+        initial_state = load_resource_state("battles/general/battle_simple_state.json")
+        final_state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeBattleRuntime(initial_state, [final_state])
+
+        result = subagent.run(initial_state, runtime)
+
+        self.assertTrue(result.handled)
+        self.assertEqual([["end"]], runtime.command_batches)
+        self.assertEqual("choose_requires_index", provider.validation_feedbacks[1].get("code"))
+
+    def test_subagent_stops_after_validation_retry_limit(self):
+        langmem_service = FakeLangMemService()
+        provider = ScriptedBattleProvider([
+            BattleDirective(mode="action", explanation="bad choose", confidence=0.7, commands=["choose rest"]),
+            BattleDirective(mode="action", explanation="bad choose again", confidence=0.7, commands=["choose rest"]),
+            BattleDirective(mode="action", explanation="should not run", confidence=0.8, commands=["end"]),
+        ])
+        subagent = build_battle_subagent(provider, langmem_service)
+        initial_state = load_resource_state("battles/general/battle_simple_state.json")
+        final_state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeBattleRuntime(initial_state, [final_state])
+
+        result = subagent.run(initial_state, runtime)
+
+        self.assertTrue(result.handled)
+        self.assertEqual(1, len(runtime.command_batches))
+        self.assertEqual(2, len(provider.validation_feedbacks))
 
 
 if __name__ == "__main__":

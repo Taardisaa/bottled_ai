@@ -42,8 +42,10 @@ class FakeCampfireRuntime:
 class ScriptedCampfireProvider:
     def __init__(self, proposals):
         self._proposals = list(proposals)
+        self.validation_feedbacks = []
 
-    def propose(self, context, working_memory):
+    def propose(self, context, working_memory, validation_feedback=None):
+        self.validation_feedbacks.append(dict(validation_feedback or {}))
         if not self._proposals:
             return CampfireCommandProposal(None, 0.0, "empty_script")
         return self._proposals.pop(0)
@@ -53,7 +55,7 @@ class TestCampfireSubagent(unittest.TestCase):
     def test_subagent_executes_rest_choice(self):
         langmem_service = FakeLangMemService()
         provider = ScriptedCampfireProvider([
-            CampfireCommandProposal("choose rest", 0.8, "rest_now"),
+            CampfireCommandProposal("choose 0", 0.8, "rest_now"),
         ])
         subagent = CampfireSubagent(provider=provider, langmem_service=langmem_service)
         initial_state = load_resource_state("/campfire/campfire_rest.json")
@@ -63,13 +65,13 @@ class TestCampfireSubagent(unittest.TestCase):
         result = subagent.run(initial_state, runtime)
 
         self.assertTrue(result.handled)
-        self.assertEqual([["choose rest"]], runtime.command_batches)
+        self.assertEqual([["choose 0"]], runtime.command_batches)
         self.assertEqual(1, len(langmem_service.recorded))
 
     def test_subagent_executes_single_option_recall(self):
         langmem_service = FakeLangMemService()
         provider = ScriptedCampfireProvider([
-            CampfireCommandProposal("choose recall", 0.9, "only_valid_choice"),
+            CampfireCommandProposal("choose 0", 0.9, "only_valid_choice"),
         ])
         subagent = CampfireSubagent(provider=provider, langmem_service=langmem_service)
         initial_state = load_resource_state("/campfire/campfire_default_because_options_blocked.json")
@@ -79,7 +81,7 @@ class TestCampfireSubagent(unittest.TestCase):
         result = subagent.run(initial_state, runtime)
 
         self.assertTrue(result.handled)
-        self.assertEqual([["choose recall"]], runtime.command_batches)
+        self.assertEqual([["choose 0"]], runtime.command_batches)
 
     def test_subagent_rejects_invalid_option(self):
         langmem_service = FakeLangMemService()
@@ -95,6 +97,40 @@ class TestCampfireSubagent(unittest.TestCase):
         self.assertFalse(result.handled)
         self.assertEqual([], runtime.command_batches)
         self.assertEqual(0, len(langmem_service.recorded))
+
+    def test_subagent_refines_choose_token_to_index(self):
+        langmem_service = FakeLangMemService()
+        provider = ScriptedCampfireProvider([
+            CampfireCommandProposal("choose rest", 0.8, "bad_token_form"),
+            CampfireCommandProposal("choose 0", 0.9, "fixed_index"),
+        ])
+        subagent = CampfireSubagent(provider=provider, langmem_service=langmem_service)
+        initial_state = load_resource_state("/campfire/campfire_rest.json")
+        final_state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeCampfireRuntime(initial_state, [final_state])
+
+        result = subagent.run(initial_state, runtime)
+
+        self.assertTrue(result.handled)
+        self.assertEqual([["choose 0"]], runtime.command_batches)
+        self.assertEqual("choose_requires_index", provider.validation_feedbacks[1].get("code"))
+
+    def test_subagent_stops_after_choose_validation_retry_limit(self):
+        langmem_service = FakeLangMemService()
+        provider = ScriptedCampfireProvider([
+            CampfireCommandProposal("choose rest", 0.8, "bad_token_form"),
+            CampfireCommandProposal("choose rest", 0.8, "bad_token_form_again"),
+            CampfireCommandProposal("choose 0", 0.9, "should_not_be_used"),
+        ])
+        subagent = CampfireSubagent(provider=provider, langmem_service=langmem_service)
+        initial_state = load_resource_state("/campfire/campfire_rest.json")
+        runtime = FakeCampfireRuntime(initial_state, [])
+
+        result = subagent.run(initial_state, runtime)
+
+        self.assertFalse(result.handled)
+        self.assertEqual([], runtime.command_batches)
+        self.assertEqual(2, len(provider.validation_feedbacks))
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from rs.llm.battle_runtime import BattleRuntimeAdapter, BattleSessionResult
 from rs.llm.integration.battle_context import build_battle_agent_context, is_battle_scope_state
 from rs.llm.langmem_service import LangMemService, get_langmem_service
 from rs.llm.providers.battle_llm_provider import BattleDirective, BattleDirectiveProvider, BattleLlmProvider
+from rs.llm.subagent_validation_middleware import validate_proposed_command
 from rs.machine.state import GameState
 
 
@@ -47,6 +48,7 @@ class BattleSubagentConfig:
     max_decision_loops: int = 32
     max_tool_calls: int = 24
     fallback_max_path_count: int = 200
+    max_validation_attempts: int = 2
 
 
 @dataclass
@@ -334,26 +336,99 @@ class BattleSubagent:
 
     def _action_validate_node(self, state: BattleSubagentState) -> dict[str, Any]:
         context = state["current_context"]
+        working_memory = dict(state["working_memory"])
         directive = state["directive"]
-        commands = [str(command) for command in directive.commands]
+        latest_explanation = str(state.get("pending_decision_explanation", directive.explanation))
+        latest_confidence = float(state.get("pending_decision_confidence", directive.confidence))
         validator = self._tools["validate_battle_command"]
-        validation = validator.run(context, {"commands": commands})
-        if bool(validation.get("is_valid")):
-            return {"pending_commands": commands}
+        last_rejected_commands: list[str] = []
+        last_feedback_payload: dict[str, Any] = {}
+
+        for attempt in range(self._config.max_validation_attempts):
+            commands = [str(command).strip() for command in directive.commands if str(command).strip()]
+            last_rejected_commands = list(commands)
+            feedback_payload: dict[str, Any] | None = None
+            if not commands:
+                feedback_payload = {
+                    "rejected_command": "",
+                    "code": "empty_action_commands",
+                    "message": "action mode requires at least one command",
+                    "corrective_hint": "return at least one executable command.",
+                    "valid_index_range": f"0..{max(0, len(context.choice_list) - 1)}",
+                    "valid_example": "choose 0" if context.choice_list else "none",
+                }
+            else:
+                for command in commands:
+                    # Only enforce the shared middleware on choose-commands.
+                    # Battle-specific command legality (play/potion/etc.) is owned by
+                    # validate_battle_command to avoid cross-validator mismatch.
+                    if not str(command).startswith("choose "):
+                        continue
+                    command_validation, command_feedback = validate_proposed_command(context, command)
+                    if not command_validation.is_valid:
+                        feedback_payload = dict(command_feedback or {})
+                        break
+
+            if feedback_payload is None:
+                validation = validator.run(context, {"commands": commands})
+                if bool(validation.get("is_valid")):
+                    return {
+                        "pending_commands": commands,
+                        "working_memory": working_memory,
+                        "pending_decision_explanation": latest_explanation,
+                        "pending_decision_confidence": latest_confidence,
+                    }
+                feedback_payload = {
+                    "rejected_command": " | ".join(commands),
+                    "code": "batch_validation_failed",
+                    "message": str(validation.get("errors", [])),
+                    "corrective_hint": "return commands that satisfy validate_battle_command.",
+                    "valid_index_range": f"0..{max(0, len(context.choice_list) - 1)}",
+                    "valid_example": "choose 0" if context.choice_list else "none",
+                }
+
+            last_feedback_payload = dict(feedback_payload or {})
+            working_memory = self._append_step_summary(
+                working_memory,
+                f"validation failed for action directive: {feedback_payload.get('code', 'unknown')}",
+            )
+            if attempt + 1 >= self._config.max_validation_attempts:
+                break
+
+            directive = self._provider.propose(
+                context,
+                working_memory,
+                self._tool_descriptions(),
+                validation_feedback=feedback_payload,
+            )
+            latest_explanation = str(directive.explanation)
+            try:
+                latest_confidence = float(directive.confidence)
+            except (TypeError, ValueError):
+                latest_confidence = 0.0
+            if directive.mode != "action":
+                break
 
         fallback_commands = self._build_guardrail_fallback_commands(context)
         if fallback_commands:
             fallback_validation = validator.run(context, {"commands": fallback_commands})
             if bool(fallback_validation.get("is_valid")):
-                working_memory = self._append_step_summary(dict(state["working_memory"]), "validation failed; using guardrail fallback")
+                working_memory = self._append_step_summary(working_memory, "validation failed; using guardrail fallback")
+                log_to_run(
+                    "BattleSubagent replaced invalid action directive with guardrail fallback: "
+                    f"rejected={last_rejected_commands}, "
+                    f"reason={last_feedback_payload.get('code', 'unknown')}, "
+                    f"details={last_feedback_payload.get('message', '')}, "
+                    f"fallback={fallback_commands}"
+                )
                 return {
                     "pending_commands": fallback_commands,
                     "working_memory": working_memory,
                 }
 
         working_memory = self._append_step_summary(
-            dict(state["working_memory"]),
-            f"validation failed with no fallback: {validation.get('errors', [])}",
+            working_memory,
+            "validation failed with no fallback",
         )
         return {
             "pending_commands": [],

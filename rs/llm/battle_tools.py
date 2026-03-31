@@ -6,7 +6,7 @@ from rs.calculator.executor import get_best_battle_action
 from rs.calculator.interfaces.comparator_interface import ComparatorInterface
 from rs.llm.agents.base_agent import AgentContext, AgentTool
 from rs.llm.langmem_service import LangMemService, get_langmem_service
-from rs.llm.validator import ValidationResult, validate_command
+from rs.llm.validator import validate_command_batch
 from rs.machine.state import GameState
 
 
@@ -39,104 +39,8 @@ def _selection_card_count(context: AgentContext) -> int:
         return 0
 
 
-def _validate_choose_for_battle(context: AgentContext, args: list[str]) -> ValidationResult:
-    selection_count = _selection_card_count(context)
-    if selection_count > 0:
-        if len(args) != 1 or not str(args[0]).isdigit():
-            return ValidationResult(False, "bad_syntax", "battle choose requires exactly one integer index")
-        index = int(args[0])
-        if index < 0 or index >= selection_count:
-            return ValidationResult(False, "index_out_of_range", "battle choose index out of selection bounds")
-        return ValidationResult(True, "ok", "valid")
-    return validate_command(context, f"choose {' '.join(args)}")
-
-
-def _validate_play_for_battle(context: AgentContext, args: list[str]) -> ValidationResult:
-    state = _state_from_context(context)
-    if len(args) not in {1, 2}:
-        return ValidationResult(False, "bad_syntax", "play requires card index and optional target index")
-    if not str(args[0]).isdigit():
-        return ValidationResult(False, "bad_syntax", "play card index must be integer")
-
-    card_index = int(args[0])
-    if card_index < 1 or card_index > len(state.hand.cards):
-        return ValidationResult(False, "index_out_of_range", "play card index out of hand bounds")
-
-    card = state.hand.cards[card_index - 1]
-    if not bool(card.is_playable):
-        return ValidationResult(False, "command_not_available", "selected card is not currently playable")
-
-    if card.has_target:
-        if len(args) != 2 or not str(args[1]).isdigit():
-            return ValidationResult(False, "bad_syntax", "targeted play requires target index")
-        target_index = int(args[1])
-        if target_index not in _alive_target_indexes(state):
-            return ValidationResult(False, "index_out_of_range", "play target is not a live monster index")
-    elif len(args) == 2:
-        return ValidationResult(False, "bad_syntax", "untargeted card cannot include a target index")
-
-    return ValidationResult(True, "ok", "valid")
-
-
-def _validate_potion_for_battle(context: AgentContext, args: list[str]) -> ValidationResult:
-    state = _state_from_context(context)
-    if len(args) not in {2, 3}:
-        return ValidationResult(False, "bad_syntax", "potion command must be 'potion use|discard <idx> [target]'")
-    if args[0] not in {"use", "discard"}:
-        return ValidationResult(False, "bad_syntax", "potion action must be use or discard")
-    if not str(args[1]).isdigit():
-        return ValidationResult(False, "bad_syntax", "potion slot must be integer")
-
-    potion_index = int(args[1])
-    if potion_index < 0 or potion_index >= len(state.get_potions()):
-        return ValidationResult(False, "index_out_of_range", "potion slot out of range")
-
-    potion = state.get_potions()[potion_index]
-    if str(potion.get("id", "")).strip() == "Potion Slot":
-        return ValidationResult(False, "command_not_available", "cannot use or discard an empty potion slot")
-
-    if len(args) == 3:
-        if not str(args[2]).isdigit():
-            return ValidationResult(False, "bad_syntax", "potion target must be integer")
-        target_index = int(args[2])
-        if target_index not in _alive_target_indexes(state):
-            return ValidationResult(False, "index_out_of_range", "potion target is not a live monster index")
-
-    return ValidationResult(True, "ok", "valid")
-
-
 def validate_battle_commands(context: AgentContext, commands: list[str]) -> dict[str, Any]:
-    normalized_commands = [str(command).strip() for command in commands if str(command).strip()]
-    if not normalized_commands:
-        return {"is_valid": False, "errors": ["empty_command_batch"], "commands": []}
-
-    errors: list[dict[str, Any]] = []
-    for command in normalized_commands:
-        tokens = command.split()
-        name = tokens[0]
-        args = tokens[1:]
-        if name == "choose":
-            validation = _validate_choose_for_battle(context, args)
-        elif name == "play":
-            validation = _validate_play_for_battle(context, args)
-        elif name == "potion":
-            validation = _validate_potion_for_battle(context, args)
-        else:
-            validation = validate_command(context, command)
-
-        if not validation.is_valid:
-            errors.append({
-                "command": command,
-                "code": validation.code,
-                "message": validation.message,
-            })
-
-    return {
-        "is_valid": len(errors) == 0,
-        "errors": errors,
-        "commands": normalized_commands,
-        "summary": "valid" if not errors else f"{len(errors)} validation errors",
-    }
+    return validate_command_batch(context, commands, mode="battle")
 
 
 class LowestEnemyHpComparator(ComparatorInterface):

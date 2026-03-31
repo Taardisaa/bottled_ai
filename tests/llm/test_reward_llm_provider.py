@@ -20,7 +20,23 @@ class TestRewardLlmProviders(unittest.TestCase):
 
         self.assertIn('"choice_token_counts"', prompt)
         self.assertIn('"relic": 2', prompt)
-        self.assertIn("Do not use any fixed potion priorities", prompt)
+        self.assertIn("CombatReward structured context:", prompt)
+        self.assertIn("Reward rows:", prompt)
+        self.assertIn("Legal Commands and Exact Semantics", prompt)
+        self.assertIn("Command availability:", prompt)
+        self.assertIn("choice_token_counts=", prompt)
+        self.assertIn("Never use `choose <token>` when `choice_token_counts[token] > 1`.", prompt)
+        self.assertIn("if `choice_token_counts.potion=3`, do not return `choose potion`", prompt)
+
+    def test_combat_reward_prompt_includes_card_delegation_note(self):
+        state = load_resource_state("/combat_reward/combat_reward_several_rewards.json")
+        context = build_combat_reward_agent_context(state, "CombatRewardHandler")
+
+        prompt = CombatRewardLlmProvider(model="gpt-5-mini")._build_prompt(context, {"recent_step_summaries": []})
+        self.assertIn("Deterministic handoff:", prompt)
+        self.assertIn("has_card_reward_row=True", prompt)
+        self.assertIn("non_card_reward_count=3", prompt)
+        self.assertNotIn("type=CARD", prompt)
 
     def test_boss_reward_prompt_includes_metadata_mismatch_flag(self):
         state = load_resource_state("/relics/boss_reward_first_is_best.json")

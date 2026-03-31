@@ -14,3 +14,61 @@ _build_memory_augmented_context is too rough. this isn't how modern agent memory
 
 subagent. langgraph based. Feed with analysis tools (calculator, coding abilities).
 
+缺失 handler	典型 screen / 状态	现在会怎样
+BattleHandler	NONE + combat	退化到 DefaultPlayHandler / DefaultEndHandler
+CampfireHandler	REST	没有 AI 选择休息/锻造/挖掘/移除
+BossRewardHandler	BOSS_REWARD	大概率落到无脑 choose 0
+CombatRewardHandler	COMBAT_REWARD	奖励、药水、遗物选择没有 AI 决策
+ChestHandler	CHEST	宝箱开启/跳过/诅咒相关没有专门逻辑
+GridSelectHandler	GRID	升级/移除/变形/筛选/scry 都没专门处理
+HandSelectHandler	HAND_SELECT	discard / exhaust / retain 类选择没 AI 处理
+NeowHandler	EVENT 里的 Neow 开局	现在并没有独立 handler，混在通用 EventHandler 语义里
+Proceed/Confirm 细分 handler	各类 confirm/proceed screen	只有通用默认 proceed，没有按上下文细分
+
+如果你要的是“按优先级”版本，那最该先补的是：
+
+## BattleHandler
+## CombatRewardHandler
+## BossRewardHandler
+## CampfireHandler
+
+
+
+
+Findings
+
+High: the graph timeout is effectively broken, so a “timed out” LLM/graph call can still block the bot for the full underlying runtime. In _invoke_with_timeout(), future.result(timeout=...) is wrapped in a with ThreadPoolExecutor(...). When TimeoutError is raised, the context manager still shuts the executor down with wait=True, which waits for the worker to finish. That means timeout_ms is not a real safety boundary in practice.
+High: prompt limiting is still based on the model’s theoretical context window, not the local server’s practical limit, so the code can still send prompts big enough to OOM your MLX server. See MODEL_TOKEN_LIMITS, get_model_token_limit(), and truncate_message(). For qwen-mlx this still treats 262144 as safe, which does not match the real memory ceiling you already hit.
+High: two-layer structured conversion has no second-stage size guard. In _ask_llm_once_two_layer(), the first-stage output is turned into first_content_text, then embedded directly into second_prompt without truncation or a dedicated smaller cap. With thinking enabled, the first-stage answer can get long enough to make the conversion pass itself slow or crash-prone.
+Medium: startup still eagerly initializes LangMem before any real gameplay decision. In main.py, get_langmem_service() is called immediately after Client(). That triggers local embedding model load in LocalSentenceTransformerEmbeddings and the health-check embedding in _initialize(). For real use, that is still unnecessary startup latency and a timeout risk on cold boot.
+
+
+
+127.0.0.1 - - [31/Mar/2026 02:22:31] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-03-31 02:22:39,946 - INFO - Prompt processing progress: 1780/1785
+2026-03-31 02:22:41,326 - INFO - KV Caches: 10 seq, 2.46 GB, latest user cache 2796 tokens
+127.0.0.1 - - [31/Mar/2026 02:22:41] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-03-31 02:22:41,524 - INFO - Prompt processing progress: 8/13
+2026-03-31 02:22:44,032 - INFO - KV Caches: 10 seq, 2.46 GB, latest user cache 2796 tokens
+127.0.0.1 - - [31/Mar/2026 02:22:44] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-03-31 02:22:50,367 - INFO - Prompt processing progress: 1261/1266
+2026-03-31 02:22:51,200 - INFO - KV Caches: 10 seq, 2.65 GB, latest user cache 2796 tokens
+127.0.0.1 - - [31/Mar/2026 02:22:51] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-03-31 02:22:51,378 - INFO - Prompt processing progress: 6/11
+2026-03-31 02:23:05,098 - INFO - KV Caches: 10 seq, 2.36 GB, latest user cache 2796 tokens
+127.0.0.1 - - [31/Mar/2026 02:23:05] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-03-31 02:23:14,166 - INFO - Prompt processing progress: 1843/1848
+2026-03-31 02:23:14,999 - INFO - KV Caches: 10 seq, 2.34 GB, latest user cache 2796 tokens
+127.0.0.1 - - [31/Mar/2026 02:23:15] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-03-31 02:23:15,237 - INFO - Prompt processing progress: 9/14
+2026-03-31 02:23:20,802 - INFO - KV Caches: 10 seq, 2.35 GB, latest user cache 2796 tokens
+127.0.0.1 - - [31/Mar/2026 02:23:20] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-03-31 02:23:29,388 - INFO - Prompt processing progress: 1729/1734
+2026-03-31 02:23:30,791 - INFO - KV Caches: 10 seq, 2.33 GB, latest user cache 2796 tokens
+127.0.0.1 - - [31/Mar/2026 02:23:30] "POST /v1/chat/completions HTTP/1.1" 200 -
+2026-03-31 02:23:31,003 - INFO - Prompt processing progress: 8/13
+libc++abi: terminating due to uncaught exception of type std::runtime_error: [METAL] Command buffer execution failed: Insufficient Memory (00000008:kIOGPUCommandBufferCallbackErrorOutOfMemory)
+zsh: abort      mlx_lm.server --model Qwen/Qwen3-8B-MLX-4bit --host 127.0.0.1 --port 8080  
+/Users/huairen/anaconda3/envs/litellm/lib/python3.10/multiprocessing/resource_tracker.py:224: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '
+(litellm) huairen@HuaideMac-mini Workspace % 

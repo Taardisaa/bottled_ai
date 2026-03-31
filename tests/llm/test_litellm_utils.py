@@ -5,6 +5,7 @@ import io
 
 from pydantic import BaseModel
 
+from rs.llm.providers.battle_llm_provider import BattleDirectiveSchema
 from rs.utils import llm_utils
 
 
@@ -172,18 +173,80 @@ class TestLiteLlmUtils(unittest.TestCase):
         encode_mock.assert_called_once_with(model="qwen-mlx", text="abcdefghij")
         decode_mock.assert_called_once_with(model="qwen-mlx", tokens=[0, 1, 2, 3])
 
-    def test_custom_base_url_prefixes_openai_provider(self):
+    def test_custom_base_url_keeps_raw_model_ids_as_default(self):
         original_base = llm_utils.config.llm_base_url
         try:
             llm_utils.config.llm_base_url = "http://127.0.0.1:8000/v1"
-            self.assertEqual("hosted_vllm/Qwen/Qwen3-14B", llm_utils._normalize_model_for_litellm("Qwen/Qwen3-14B"))
-            self.assertEqual("hosted_vllm/gpt-5-mini", llm_utils._normalize_model_for_litellm("gpt-5-mini"))
+            self.assertEqual("Qwen/Qwen3-14B", llm_utils._normalize_model_for_litellm("Qwen/Qwen3-14B"))
+            self.assertEqual("gpt-5-mini", llm_utils._normalize_model_for_litellm("gpt-5-mini"))
             self.assertEqual(
                 "openrouter/openai/gpt-5-mini",
                 llm_utils._normalize_model_for_litellm("openrouter/openai/gpt-5-mini"),
             )
         finally:
             llm_utils.config.llm_base_url = original_base
+
+    def test_custom_base_url_preserves_openai_prefix_when_present(self):
+        original_base = llm_utils.config.llm_base_url
+        try:
+            llm_utils.config.llm_base_url = "http://127.0.0.1:8000/v1"
+            self.assertEqual("openai/qwen-mlx", llm_utils._normalize_model_for_litellm("openai/qwen-mlx"))
+            self.assertEqual("hosted_vllm/Qwen/Qwen3-14B", llm_utils._normalize_model_for_litellm("hosted_vllm/Qwen/Qwen3-14B"))
+        finally:
+            llm_utils.config.llm_base_url = original_base
+
+    def test_finalize_model_before_request_strips_openai_prefix_for_custom_base(self):
+        original_base = llm_utils.config.llm_base_url
+        try:
+            llm_utils.config.llm_base_url = "http://127.0.0.1:8000/v1"
+            self.assertEqual("qwen-mlx", llm_utils._finalize_model_before_request("openai/qwen-mlx"))
+            self.assertEqual("qwen-mlx", llm_utils._finalize_model_before_request("qwen-mlx"))
+        finally:
+            llm_utils.config.llm_base_url = original_base
+
+    def test_call_litellm_quietly_retries_with_openai_prefix_on_provider_error(self):
+        original_base = llm_utils.config.llm_base_url
+        calls = []
+
+        def fake_completion(*args, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise Exception("LLM Provider NOT provided. You passed model=qwen-mlx")
+            return {"ok": True}
+
+        try:
+            llm_utils.config.llm_base_url = "http://127.0.0.1:8000/v1"
+            with patch("rs.utils.llm_utils.completion", side_effect=fake_completion):
+                result = llm_utils._call_litellm_quietly(llm_utils.completion, model="qwen-mlx")
+        finally:
+            llm_utils.config.llm_base_url = original_base
+
+        self.assertEqual({"ok": True}, result)
+        self.assertEqual(2, len(calls))
+        self.assertEqual("qwen-mlx", calls[0]["model"])
+        self.assertEqual("openai/qwen-mlx", calls[1]["model"])
+
+    def test_call_litellm_quietly_retries_with_raw_model_on_invalid_prefixed_name(self):
+        original_base = llm_utils.config.llm_base_url
+        calls = []
+
+        def fake_completion(*args, **kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                raise Exception("Invalid model name passed in model=openai/qwen-mlx")
+            return {"ok": True}
+
+        try:
+            llm_utils.config.llm_base_url = "http://127.0.0.1:8000/v1"
+            with patch("rs.utils.llm_utils.completion", side_effect=fake_completion):
+                result = llm_utils._call_litellm_quietly(llm_utils.completion, model="openai/qwen-mlx")
+        finally:
+            llm_utils.config.llm_base_url = original_base
+
+        self.assertEqual({"ok": True}, result)
+        self.assertEqual(2, len(calls))
+        self.assertEqual("openai/qwen-mlx", calls[0]["model"])
+        self.assertEqual("qwen-mlx", calls[1]["model"])
 
     def test_ensure_api_key_overwrites_stale_openai_env(self):
         original_env = os.environ.get("OPENAI_API_KEY")
@@ -329,6 +392,165 @@ class TestLiteLlmUtils(unittest.TestCase):
         self.assertEqual(2, len(calls))
         self.assertNotIn("response_format", calls[0])
         self.assertIs(DecisionSchema, calls[1]["response_format"])
+
+    def test_ask_llm_once_two_layer_struct_convert_retries_second_stage(self):
+        calls = []
+
+        def fake_completion(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return {
+                    "choices": [{"message": {"content": "play 1 0"}}],
+                    "usage": {"total_tokens": 7},
+                }
+            if len(calls) == 2:
+                return {
+                    "choices": [{"message": {"content": "still not json"}}],
+                    "usage": {"total_tokens": 3},
+                }
+            return {
+                "choices": [{"message": {"content": '{"proposed_command":"play 1 0","confidence":0.8,"explanation":"converted"}'}}],
+                "usage": {"total_tokens": 5},
+            }
+
+        with patch("rs.utils.llm_utils._ensure_api_key_for_model", return_value=True), \
+                patch("rs.utils.llm_utils.completion", side_effect=fake_completion):
+            response, total_tokens = llm_utils.ask_llm_once(
+                message="test",
+                model="gpt-5-mini",
+                struct=DecisionSchema,
+                temperature=1.0,
+                enable_cache=False,
+                two_layer_struct_convert=True,
+            )
+
+        self.assertIsInstance(response, DecisionSchema)
+        assert isinstance(response, DecisionSchema)
+        self.assertEqual("play 1 0", response.proposed_command)
+        self.assertEqual(15, total_tokens)
+        self.assertEqual(3, len(calls))
+        self.assertNotIn("response_format", calls[0])
+        self.assertIs(DecisionSchema, calls[1]["response_format"])
+        self.assertIs(DecisionSchema, calls[2]["response_format"])
+
+    def test_ask_llm_once_two_layer_reruns_first_stage_after_second_stage_exhausted(self):
+        calls = []
+
+        def fake_completion(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return {
+                    "choices": [{"message": {"content": "bad first pass"}}],
+                    "usage": {"total_tokens": 7},
+                }
+            if len(calls) in {2, 3, 4}:
+                return {
+                    "choices": [{"message": {"content": "still not json"}}],
+                    "usage": {"total_tokens": 1},
+                }
+            if len(calls) == 5:
+                return {
+                    "choices": [{"message": {"content": "play 1 0"}}],
+                    "usage": {"total_tokens": 6},
+                }
+            return {
+                "choices": [{"message": {"content": '{"proposed_command":"play 1 0","confidence":0.8,"explanation":"converted"}'}}],
+                "usage": {"total_tokens": 5},
+            }
+
+        with patch("rs.utils.llm_utils._ensure_api_key_for_model", return_value=True), \
+                patch("rs.utils.llm_utils.completion", side_effect=fake_completion):
+            response, total_tokens = llm_utils.ask_llm_once(
+                message="test",
+                model="gpt-5-mini",
+                struct=DecisionSchema,
+                temperature=1.0,
+                enable_cache=False,
+                two_layer_struct_convert=True,
+            )
+
+        self.assertIsInstance(response, DecisionSchema)
+        assert isinstance(response, DecisionSchema)
+        self.assertEqual("play 1 0", response.proposed_command)
+        self.assertEqual(21, total_tokens)
+        self.assertEqual(6, len(calls))
+
+    def test_ask_llm_once_two_layer_accepts_first_pass_field_lines(self):
+        calls = []
+
+        def fake_completion(**kwargs):
+            calls.append(kwargs)
+            return {
+                "choices": [{
+                    "message": {
+                        "content": (
+                            "proposed_command: skip\n"
+                            "confidence: 0.95\n"
+                            "explanation: deck has no cap; low-impact options this turn"
+                        )
+                    }
+                }],
+                "usage": {"total_tokens": 9},
+            }
+
+        with patch("rs.utils.llm_utils._ensure_api_key_for_model", return_value=True), \
+                patch("rs.utils.llm_utils.completion", side_effect=fake_completion):
+            response, total_tokens = llm_utils.ask_llm_once(
+                message="test",
+                model="gpt-5-mini",
+                struct=DecisionSchema,
+                temperature=1.0,
+                enable_cache=False,
+                two_layer_struct_convert=True,
+            )
+
+        self.assertIsInstance(response, DecisionSchema)
+        assert isinstance(response, DecisionSchema)
+        self.assertEqual("skip", response.proposed_command)
+        self.assertAlmostEqual(0.95, response.confidence, places=2)
+        self.assertEqual(9, total_tokens)
+        self.assertEqual(1, len(calls))
+        self.assertNotIn("response_format", calls[0])
+
+    def test_ask_llm_once_two_layer_accepts_null_tool_payload_for_battle_schema(self):
+        calls = []
+
+        def fake_completion(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == 1:
+                return {
+                    "choices": [{"message": {"content": "play 1 0"}}],
+                    "usage": {"total_tokens": 7},
+                }
+            return {
+                "choices": [{
+                    "message": {
+                        "content": (
+                            '{"commands": ["play 1 0"], "confidence": 0.9, '
+                            '"explanation": "parsed", "mode": "action", '
+                            '"tool_name": null, "tool_payload": null}'
+                        )
+                    }
+                }],
+                "usage": {"total_tokens": 5},
+            }
+
+        with patch("rs.utils.llm_utils._ensure_api_key_for_model", return_value=True), \
+                patch("rs.utils.llm_utils.completion", side_effect=fake_completion):
+            response, total_tokens = llm_utils.ask_llm_once(
+                message="test",
+                model="gpt-5-mini",
+                struct=BattleDirectiveSchema,
+                temperature=1.0,
+                enable_cache=False,
+                two_layer_struct_convert=True,
+            )
+
+        self.assertIsInstance(response, BattleDirectiveSchema)
+        assert isinstance(response, BattleDirectiveSchema)
+        self.assertEqual(["play 1 0"], response.commands)
+        self.assertEqual({}, response.tool_payload)
+        self.assertEqual(12, total_tokens)
 
     def test_ask_llm_multi_two_layer_preserves_none_entries(self):
         calls = []

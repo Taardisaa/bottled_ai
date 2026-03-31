@@ -26,3 +26,4 @@ Choice branch summaries:
 {choice_branch_summaries_text}
 Representative descendant paths:
 {choice_representative_paths_text}
+{validation_feedback_block}

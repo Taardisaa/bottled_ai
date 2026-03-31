@@ -35,8 +35,12 @@ class ShopPurchaseLlmProvider:
         self.model = config.fast_llm_model if model is None else model
         self.temperature = temperature
 
-    def propose(self, context: AgentContext) -> ShopPurchaseLlmProposal:
-        prompt = self._build_prompt(context)
+    def propose(
+            self,
+            context: AgentContext,
+            validation_feedback: Dict[str, Any] | None = None,
+    ) -> ShopPurchaseLlmProposal:
+        prompt = self._build_prompt(context, validation_feedback)
         try:
             from rs.utils.llm_utils import ask_llm_once
         except Exception as e:
@@ -94,7 +98,11 @@ class ShopPurchaseLlmProvider:
             },
         )
 
-    def _build_prompt(self, context: AgentContext) -> str:
+    def _build_prompt(
+            self,
+            context: AgentContext,
+            validation_feedback: Dict[str, Any] | None = None,
+    ) -> str:
         floor = context.game_state.get("floor", "unknown")
         act = context.game_state.get("act", "unknown")
         gold = context.game_state.get("gold", "unknown")
@@ -122,6 +130,13 @@ class ShopPurchaseLlmProvider:
             context.extras.get("held_potion_names", []),
             context.extras.get("potions_full", False),
         )
+        validation_feedback_block = ""
+        if validation_feedback is not None:
+            validation_feedback_block = (
+                "Validation feedback from previous rejected proposal:\n"
+                f"{json.dumps(validation_feedback, sort_keys=True)}\n"
+                "If feedback is present, correct the command to satisfy it.\n"
+            )
 
         return PROMPT_TEMPLATE.format(
             shop_options_text=shop_options_text,
@@ -146,6 +161,7 @@ class ShopPurchaseLlmProvider:
             shop_card_offers=json.dumps(offer_summaries.get("cards", []), sort_keys=True),
             shop_relic_offers=json.dumps(offer_summaries.get("relics", []), sort_keys=True),
             shop_potion_offers=json.dumps(offer_summaries.get("potions", []), sort_keys=True),
+            validation_feedback_block=validation_feedback_block,
         )
 
     def _format_choice_list(self, choice_list: list[Any]) -> str:

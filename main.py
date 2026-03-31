@@ -2,6 +2,7 @@ import argparse
 import threading
 import time
 import traceback
+from typing import Callable
 
 from rs.api.client import Client
 from rs.helper.logger import log, init_log, log_new_run_sequence
@@ -14,10 +15,22 @@ from rs.utils.llm_utils import run_llm_preflight_check
 
 # If there are run seeds, it will run them. Otherwise, it will use the run amount.
 run_seeds = [
-    #'LGZ12EEMFGUK',
+    # 'LGZ12EEMFGUK',
+    "114514"
 ]
 DEFAULT_RUN_AMOUNT = 1
 DEFAULT_CHARACTER = Character.WATCHER
+
+
+def initialize_client_and_langmem(
+        client_factory: Callable[[], Client] = Client,
+        langmem_factory: Callable[[], object] = get_langmem_service,
+) -> tuple[Client, object]:
+    client = client_factory()
+    log("before langmem init")
+    langmem_service = langmem_factory()
+    log("after langmem init")
+    return client, langmem_service
 
 
 def _run_preflight_in_background() -> None:
@@ -78,10 +91,7 @@ if __name__ == "__main__":
     log(f"Agent identity: {DEFAULT_AGENT_IDENTITY}")
     log_new_run_sequence()
     try:
-        client = Client()
-        log("before langmem init")
-        langmem_service = get_langmem_service()
-        log("after langmem init")
+        client, langmem_service = initialize_client_and_langmem()
         log(f"LangMem status: {langmem_service.status()}")
         threading.Thread(
             target=_run_preflight_in_background,

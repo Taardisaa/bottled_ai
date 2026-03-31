@@ -14,8 +14,31 @@ class TestRewardContexts(unittest.TestCase):
         context = build_combat_reward_agent_context(state, "CombatRewardHandler")
 
         reward_summaries = context.extras["reward_summaries"]
-        self.assertEqual(["GOLD", "RELIC", "POTION", "CARD"], [row["reward_type"] for row in reward_summaries])
-        self.assertEqual([0, 1, 2, 3], [row["choice_index"] for row in reward_summaries])
+        self.assertEqual(["GOLD", "RELIC", "POTION"], [row["reward_type"] for row in reward_summaries])
+        self.assertEqual([0, 1, 2], [row["choice_index"] for row in reward_summaries])
+        self.assertEqual(["gold", "relic", "potion"], [row["choice_token"] for row in reward_summaries])
+        self.assertTrue(all("reward_summary_line" in row for row in reward_summaries))
+        self.assertEqual(["gold", "relic", "potion"], context.extras["llm_choice_list"])
+        self.assertTrue(context.extras["has_card_reward_row"])
+        self.assertEqual(3, context.extras["non_card_reward_count"])
+        self.assertEqual(3, context.extras["card_reward_choice_index"])
+        self.assertEqual([3], context.extras["card_reward_choice_indexes"])
+        self.assertEqual(["card"], context.extras["card_reward_choice_tokens"])
+
+        all_reward_summaries = context.extras["all_reward_summaries"]
+        self.assertEqual(["GOLD", "RELIC", "POTION", "CARD"], [row["reward_type"] for row in all_reward_summaries])
+
+        gold_row = reward_summaries[0]
+        self.assertEqual(35, gold_row["gold"])
+        self.assertIn("type=GOLD", gold_row["reward_summary_line"])
+
+        relic_row = reward_summaries[1]
+        self.assertEqual("frozen egg", relic_row["relic_name"])
+        self.assertIn("relic_id='Frozen Egg 2'", relic_row["reward_summary_line"])
+
+        potion_row = reward_summaries[2]
+        self.assertEqual("weak potion", potion_row["potion_name"])
+        self.assertIn("can_discard=True", potion_row["reward_summary_line"])
 
     def test_boss_reward_context_marks_choice_metadata_mismatch(self):
         state = load_resource_state("/relics/boss_reward_first_is_best.json")
