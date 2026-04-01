@@ -75,7 +75,7 @@ class BattleDirectiveProvider(Protocol):
 
 
 class BattleLlmProvider:
-    def __init__(self, model: str | None = None, temperature: float = 0.2):
+    def __init__(self, model: str | None = None, temperature: float = 0.6):
         self.model = config.fast_llm_model if model is None else model
         self.temperature = temperature
 

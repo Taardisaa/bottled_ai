@@ -7,7 +7,6 @@ Please answer in short plain text using these fields:
 Rules:
 - For normal map selection, proposed_command should usually be "choose <index>".
 - The index is 0-based and must match the Map options list below.
-- Use the deterministic path summaries first; only deviate when the path tradeoff is plausibly better under uncertainty.
 - Favor survivability when HP is low or elites are risky.
 - If uncertain, set proposed_command to null and low confidence.
 
@@ -21,7 +20,6 @@ Recent LLM decisions: {recent_llm_decisions}
 Deck profile: {deck_profile}
 Boss available: {boss_available}
 First node already chosen: {first_node_chosen}
-Deterministic best command: {deterministic_best_command}
 Choice branch summaries:
 {choice_branch_summaries_text}
 Representative descendant paths:

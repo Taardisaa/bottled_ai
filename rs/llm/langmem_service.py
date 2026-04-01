@@ -217,8 +217,6 @@ class LangMemService:
             return
 
         try:
-            if self._repository is None:
-                self._repository = LangMemRepository(self._config.langmem_sqlite_path)
             embeddings_client = self._build_embeddings_client()
             health_vector = embeddings_client.embed_query("langmem health check")
             if not isinstance(health_vector, list) or not health_vector:
@@ -230,6 +228,8 @@ class LangMemService:
                 "dims": dims,
                 "fields": ["content"],
             })
+            if self._repository is None:
+                self._repository = LangMemRepository(self._config.langmem_sqlite_path)
             self._hydrate_from_repository()
             self._status = "ready"
         except Exception as e:
@@ -470,7 +470,7 @@ class LangMemService:
             model=llm_runtime_config.fast_llm_model,
             base_url=chat_base_url,
             api_key=chat_api_key,
-            temperature=0.0,
+            temperature=0.6,
         )
         return create_memory_store_manager(
             chat_model,

@@ -43,6 +43,11 @@ class LocalEmbeddingsLangMemService(LangMemService):
         return FakeEmbeddings()
 
 
+class BrokenEmbeddingsLangMemService(LangMemService):
+    def _build_embeddings_client(self):
+        raise ValueError("simulated_embedding_init_failure")
+
+
 class TestLangMemService(unittest.TestCase):
     def test_repository_roundtrip(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -176,7 +181,7 @@ class TestLangMemService(unittest.TestCase):
 
     def test_service_disables_when_embeddings_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:
-            service = LangMemService(
+            service = BrokenEmbeddingsLangMemService(
                 config=LlmConfig(
                     enabled=True,
                     langmem_enabled=True,
@@ -187,6 +192,21 @@ class TestLangMemService(unittest.TestCase):
             self.assertTrue(service.status().startswith("embeddings_unavailable"))
             service.shutdown(wait=True)
 
+    def test_service_does_not_create_sqlite_when_embeddings_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "memory.sqlite3"
+            service = BrokenEmbeddingsLangMemService(
+                config=LlmConfig(
+                    enabled=True,
+                    langmem_enabled=True,
+                    langmem_sqlite_path=str(db_path),
+                ),
+            )
+            self.assertTrue(service.status().startswith("embeddings_unavailable"))
+            self.assertFalse(service.is_ready())
+
+            service.shutdown(wait=True)
+            self.assertFalse(db_path.exists())
 
 if __name__ == "__main__":
     unittest.main()

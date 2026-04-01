@@ -89,7 +89,7 @@ class TestLiteLlmUtils(unittest.TestCase):
         counter_mock.assert_called_once_with(model="qwen-mlx", text="abc")
         tiktoken_mock.assert_not_called()
 
-    def test_litellm_stdout_noise_is_redirected_to_stderr(self):
+    def test_litellm_stdout_noise_is_suppressed(self):
         stderr_capture = io.StringIO()
 
         def noisy_counter(*args, **kwargs):
@@ -97,11 +97,11 @@ class TestLiteLlmUtils(unittest.TestCase):
             return 11
 
         with patch("rs.utils.llm_utils.litellm_token_counter", side_effect=noisy_counter), \
-                patch.object(llm_utils.sys, "stderr", stderr_capture):
+                patch("sys.stderr", stderr_capture):
             token_count = llm_utils.count_tokens("abc", "openai/qwen-mlx")
 
         self.assertEqual(11, token_count)
-        self.assertIn("Provider List:", stderr_capture.getvalue())
+        self.assertNotIn("Provider List:", stderr_capture.getvalue())
 
     def test_get_model_token_limit_uses_litellm_with_normalized_model_name(self):
         with patch("rs.utils.llm_utils.litellm_get_max_tokens", return_value=98765) as max_tokens_mock:
@@ -183,6 +183,12 @@ class TestLiteLlmUtils(unittest.TestCase):
                 "openrouter/openai/gpt-5-mini",
                 llm_utils._normalize_model_for_litellm("openrouter/openai/gpt-5-mini"),
             )
+            self.assertEqual("openai/Qwen/Qwen3-14B", llm_utils._litellm_routed_model_id("Qwen/Qwen3-14B"))
+            self.assertEqual("openai/gpt-5-mini", llm_utils._litellm_routed_model_id("gpt-5-mini"))
+            self.assertEqual(
+                "openrouter/openai/gpt-5-mini",
+                llm_utils._litellm_routed_model_id("openrouter/openai/gpt-5-mini"),
+            )
         finally:
             llm_utils.config.llm_base_url = original_base
 
@@ -192,6 +198,8 @@ class TestLiteLlmUtils(unittest.TestCase):
             llm_utils.config.llm_base_url = "http://127.0.0.1:8000/v1"
             self.assertEqual("openai/qwen-mlx", llm_utils._normalize_model_for_litellm("openai/qwen-mlx"))
             self.assertEqual("hosted_vllm/Qwen/Qwen3-14B", llm_utils._normalize_model_for_litellm("hosted_vllm/Qwen/Qwen3-14B"))
+            self.assertEqual("openai/qwen-mlx", llm_utils._litellm_routed_model_id("openai/qwen-mlx"))
+            self.assertEqual("hosted_vllm/Qwen/Qwen3-14B", llm_utils._litellm_routed_model_id("hosted_vllm/Qwen/Qwen3-14B"))
         finally:
             llm_utils.config.llm_base_url = original_base
 
@@ -204,27 +212,25 @@ class TestLiteLlmUtils(unittest.TestCase):
         finally:
             llm_utils.config.llm_base_url = original_base
 
-    def test_call_litellm_quietly_retries_with_openai_prefix_on_provider_error(self):
+    def test_call_litellm_quietly_single_completion_with_prefixed_model_from_kwargs(self):
         original_base = llm_utils.config.llm_base_url
         calls = []
 
         def fake_completion(*args, **kwargs):
             calls.append(kwargs)
-            if len(calls) == 1:
-                raise Exception("LLM Provider NOT provided. You passed model=qwen-mlx")
             return {"ok": True}
 
         try:
             llm_utils.config.llm_base_url = "http://127.0.0.1:8000/v1"
             with patch("rs.utils.llm_utils.completion", side_effect=fake_completion):
-                result = llm_utils._call_litellm_quietly(llm_utils.completion, model="qwen-mlx")
+                kwargs = llm_utils._litellm_completion_kwargs("qwen-mlx", 0.0)
+                result = llm_utils._call_litellm_quietly(llm_utils.completion, **kwargs)
         finally:
             llm_utils.config.llm_base_url = original_base
 
         self.assertEqual({"ok": True}, result)
-        self.assertEqual(2, len(calls))
-        self.assertEqual("qwen-mlx", calls[0]["model"])
-        self.assertEqual("openai/qwen-mlx", calls[1]["model"])
+        self.assertEqual(1, len(calls))
+        self.assertEqual("openai/qwen-mlx", calls[0]["model"])
 
     def test_call_litellm_quietly_retries_with_raw_model_on_invalid_prefixed_name(self):
         original_base = llm_utils.config.llm_base_url
@@ -631,7 +637,7 @@ class TestLiteLlmUtils(unittest.TestCase):
             with patch("rs.utils.llm_utils.completion", side_effect=fake_completion):
                 response, _ = llm_utils.ask_llm_once(
                     message="test",
-                    model="Qwen/Qwen3-32B",
+                    model="qwen-mlx",
                     struct=DecisionSchema,
                     temperature=1.0,
                     enable_cache=False,
@@ -640,6 +646,7 @@ class TestLiteLlmUtils(unittest.TestCase):
             self.assertIsInstance(response, DecisionSchema)
             self.assertEqual("http://127.0.0.1:8000/v1", captured.get("api_base"))
             self.assertNotIn("api_key", captured)
+            self.assertEqual("openai/qwen-mlx", captured.get("model"))
             self.assertEqual(True, captured.get("extra_body", {}).get("chat_template_kwargs", {}).get("enable_thinking"))
 
             captured.clear()
@@ -647,7 +654,7 @@ class TestLiteLlmUtils(unittest.TestCase):
             with patch("rs.utils.llm_utils.completion", side_effect=fake_completion):
                 response, _ = llm_utils.ask_llm_once(
                     message="test",
-                    model="Qwen/Qwen3-32B",
+                    model="qwen-mlx",
                     struct=DecisionSchema,
                     temperature=1.0,
                     enable_cache=False,
@@ -656,6 +663,7 @@ class TestLiteLlmUtils(unittest.TestCase):
             self.assertIsInstance(response, DecisionSchema)
             self.assertEqual("http://127.0.0.1:8000/v1", captured.get("api_base"))
             self.assertEqual("test-local-secret", captured.get("api_key"))
+            self.assertEqual("openai/qwen-mlx", captured.get("model"))
             self.assertEqual(True, captured.get("extra_body", {}).get("chat_template_kwargs", {}).get("enable_thinking"))
         finally:
             llm_utils.config.llm_base_url = original_base
@@ -691,6 +699,7 @@ class TestLiteLlmUtils(unittest.TestCase):
         original_key = llm_utils.config.llm_api_key
         original_two_layer = llm_utils.config.llm_two_layer_struct_convert
         original_enable_thinking = llm_utils.config.llm_enable_thinking
+        original_fast = llm_utils.config.fast_llm_model
         calls = []
 
         def fake_completion(**kwargs):
@@ -710,6 +719,7 @@ class TestLiteLlmUtils(unittest.TestCase):
             llm_utils.config.llm_api_key = "test-local-secret"
             llm_utils.config.llm_two_layer_struct_convert = True
             llm_utils.config.llm_enable_thinking = True
+            llm_utils.config.fast_llm_model = "qwen-mlx"
 
             with patch("rs.utils.llm_utils._ensure_api_key_for_model", return_value=True), \
                     patch("rs.utils.llm_utils.completion", side_effect=fake_completion):
@@ -725,6 +735,7 @@ class TestLiteLlmUtils(unittest.TestCase):
             llm_utils.config.llm_api_key = original_key
             llm_utils.config.llm_two_layer_struct_convert = original_two_layer
             llm_utils.config.llm_enable_thinking = original_enable_thinking
+            llm_utils.config.fast_llm_model = original_fast
 
         self.assertIsInstance(response, DecisionSchema)
         self.assertEqual(12, total_tokens)

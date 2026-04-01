@@ -1,5 +1,6 @@
+import copy
 import json
-from typing import Optional
+from typing import Any, Optional
 
 from rs.api.client import Client
 from rs.helper.controller import await_controller
@@ -57,6 +58,8 @@ class Game:
         self.character = character
         self.last_state: Optional[GameState] = None
         self.game_over_handler: DefaultGameOverHandler = DefaultGameOverHandler()
+        # Communication Mod may omit ``game_state`` after run teardown (e.g. after game-over ``proceed``).
+        self._langmem_last_game_state: Optional[dict[str, Any]] = None
 
     def start(self, seed: str = ""):
         set_current_agent_identity(DEFAULT_AGENT_IDENTITY)
@@ -76,6 +79,7 @@ class Game:
         log_to_run("Starting Run")
         try:
             while self.last_state.is_game_running():
+                self._capture_langmem_game_state_snapshot()
                 await_controller(self.last_state)
                 self.__handle_state_based_logging()
                 handled = False
@@ -112,12 +116,15 @@ class Game:
 
     def __send_command(self, command: str):
         self.last_state = GameState(json.loads(self.client.send_message(command)))
+        self._capture_langmem_game_state_snapshot()
 
     def __send_silent_command(self, command: str):
         self.last_state = GameState(json.loads(self.client.send_message(command, silent=True)))
+        self._capture_langmem_game_state_snapshot()
 
     def __send_setup_command(self, command: str):
         self.last_state = GameState(json.loads(self.client.send_message(command, before_run=True)))
+        self._capture_langmem_game_state_snapshot()
 
     def _execute_runtime_command(self, command: str):
         self.__send_command(command)
@@ -137,18 +144,44 @@ class Game:
                 self.run_bosses.append(self.last_boss)
                 self.last_boss = ""
 
+    def _capture_langmem_game_state_snapshot(self) -> None:
+        if self.last_state is None:
+            return
+        state_json = getattr(self.last_state, "json", None)
+        if not isinstance(state_json, dict):
+            return
+        raw = state_json.get("game_state")
+        if isinstance(raw, dict):
+            self._langmem_last_game_state = copy.deepcopy(raw)
+
     def __finalize_langmem_run(self):
         if self.last_state is None:
             return
 
-        game_state = self.last_state.game_state()
+        raw_state = getattr(self.last_state, "json", None)
+        if not isinstance(raw_state, dict):
+            return
+        game_state = raw_state.get("game_state")
+        if not isinstance(game_state, dict):
+            game_state = self._langmem_last_game_state
+        if not isinstance(game_state, dict):
+            log_to_run(
+                "Skipping LangMem finalization: final payload has no game_state and no snapshot was captured."
+            )
+            return
+
+        floor = game_state.get("floor")
+        screen_type = str(game_state.get("screen_type", "UNKNOWN"))
+        screen_state = game_state.get("screen_state", {})
+        score = screen_state.get("score") if isinstance(screen_state, dict) else None
+
         context = AgentContext(
             handler_name="RunFinalizer",
-            screen_type=self.last_state.screen_type(),
+            screen_type=screen_type,
             available_commands=[],
             choice_list=[],
             game_state={
-                "floor": self.last_state.floor(),
+                "floor": floor,
                 "act": game_state.get("act"),
                 "character_class": game_state.get("class"),
             },
@@ -157,15 +190,15 @@ class Game:
                 "agent_identity": DEFAULT_AGENT_IDENTITY,
                 "run_memory_summary": (
                     f"{game_state.get('class', 'unknown')} act {game_state.get('act', 'unknown')} "
-                    f"floor {self.last_state.floor()} hp {game_state.get('current_hp', 'unknown')}/"
+                    f"floor {floor if floor is not None else 'unknown'} hp {game_state.get('current_hp', 'unknown')}/"
                     f"{game_state.get('max_hp', 'unknown')} gold {game_state.get('gold', 'unknown')}"
                 ),
             },
         )
         payload = {
-            "floor": self.last_state.floor(),
-            "score": self.last_state.screen_state().get("score"),
-            "victory": not self.last_state.is_game_running(),
+            "floor": floor,
+            "score": score,
+            "victory": not bool(raw_state.get("in_game", False)),
             "bosses": list(self.run_bosses),
             "elites": list(self.run_elites),
             "run_memory_summary": context.extras["run_memory_summary"],
@@ -186,6 +219,7 @@ class Game:
             return False
         if result.final_state is not None:
             self.last_state = result.final_state
+            self._capture_langmem_game_state_snapshot()
 
         for command in result.commands or []:
             self.__send_command(command)

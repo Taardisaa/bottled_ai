@@ -4,10 +4,10 @@ import json
 import os
 from pathlib import Path
 import re
-import sys
 from typing import Optional, Any, Union, Tuple, List
 
 from collections.abc import Sequence
+import litellm
 from litellm import (
     completion,
     batch_completion,
@@ -16,6 +16,9 @@ from litellm import (
     get_max_tokens as litellm_get_max_tokens,
     token_counter as litellm_token_counter,
 )
+
+# Avoid repeated "Provider List" / help banners when LiteLLM cannot infer a provider.
+litellm.suppress_debug_info = True
 from langchain.tools import BaseTool
 from pydantic import BaseModel
 from typing import Dict, Type
@@ -90,8 +93,6 @@ def _normalize_model_for_litellm(model: str) -> str:
     if not _has_custom_base_url():
         return normalized
 
-    # For custom OpenAI-compatible endpoints, keep raw model ids as the default
-    # final request shape. Prefix fallback (openai/<model>) is handled on retry.
     if _is_openrouter_model(normalized):
         return normalized
     return normalized
@@ -106,6 +107,24 @@ def _finalize_model_before_request(model: str) -> str:
     if normalized.startswith("openai/"):
         return normalized.split("/", 1)[1]
     return normalized
+
+
+def _model_has_litellm_provider_prefix(model: str) -> bool:
+    m = str(model).strip()
+    return any(m.startswith(f"{p}/") for p in _TOKENIZER_PROVIDER_PREFIXES)
+
+
+def _litellm_routed_model_id(request_model: str) -> str:
+    """Model id passed to litellm.completion (adds openai/ for custom endpoints when needed)."""
+    finalized = _finalize_model_before_request(request_model)
+    routed = _normalize_model_for_litellm(finalized)
+    if (
+            _has_custom_base_url()
+            and not _is_openrouter_model(request_model)
+            and not _model_has_litellm_provider_prefix(routed)
+    ):
+        return f"openai/{routed}"
+    return routed
 
 
 def _provider_name_for_model(model: str) -> str:
@@ -288,10 +307,8 @@ def _decode_tokens_with_model_tokenizer(token_ids: list[int], model: str, codec_
 
 def _litellm_completion_kwargs(model: str, temperature: float, **extra_kwargs: Any) -> Dict[str, Any]:
     enable_thinking = extra_kwargs.pop("enable_thinking", None)
-    finalized_model = _finalize_model_before_request(model)
-    normalized_model = _normalize_model_for_litellm(finalized_model)
     kwargs: Dict[str, Any] = {
-        "model": normalized_model,
+        "model": _litellm_routed_model_id(model),
         "temperature": temperature,
     }
     if _has_custom_base_url():
@@ -348,8 +365,8 @@ def _merge_extra_body(existing: Any, additions: Dict[str, Any]) -> Dict[str, Any
 
 
 def _call_litellm_quietly(function: Any, *args: Any, **kwargs: Any) -> Any:
-    """Redirect Python-level stdout noise from LiteLLM-compatible libraries to stderr."""
-    with redirect_stdout(sys.stderr):
+    """Discard Python-level stdout from LiteLLM and related libraries during calls."""
+    with open(os.devnull, "w", encoding="utf-8") as dev_null, redirect_stdout(dev_null):
         try:
             return function(*args, **kwargs)
         except Exception as error:
@@ -368,16 +385,6 @@ def _fallback_completion_kwargs_for_model_error(
     if model == "":
         return None
     message = str(error).lower()
-
-    # Some custom endpoints/proxies reject raw model ids without provider hint.
-    # Models like "Qwen/Qwen3-32B" contain a slash but are not provider-prefixed.
-    known_prefixes = {f"{p}/" for p in _TOKENIZER_PROVIDER_PREFIXES}
-    has_provider_prefix = any(model.startswith(p) for p in known_prefixes)
-    if "llm provider not provided" in message and not has_provider_prefix:
-        retry_kwargs = dict(kwargs)
-        retry_kwargs["model"] = f"openai/{model}"
-        logger.warning(f"Retrying completion with provider-prefixed model: {retry_kwargs['model']}")
-        return retry_kwargs
 
     # Some proxies validate model names before provider stripping and only accept
     # bare ids (e.g. qwen-mlx), so retry once without openai/ prefix.
@@ -637,7 +644,7 @@ def run_llm_preflight_check(
         model: Optional[str] = None,
         probe_message: str = "Reply with exactly: OK") -> LLMPreflightResult:
     requested_model = model or config.fast_llm_model
-    routed_model = _normalize_model_for_litellm(requested_model)
+    routed_model = _litellm_routed_model_id(requested_model)
     normalized_model = _normalize_model_for_tokenizer(requested_model)
     provider = _provider_name_for_model(requested_model)
     endpoint = _endpoint_for_model(requested_model)

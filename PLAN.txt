@@ -75,8 +75,6 @@ zsh: abort      mlx_lm.server --model Qwen/Qwen3-8B-MLX-4bit --host 127.0.0.1 --
 
 
 
-
-
 2026-03-31 17:41:46.034 | INFO     | rs.utils.llm_utils:ask_llm_once:1145 - LLM output preview: {"mode": "action", "explanation": "The player has no playable cards due to zero energy, and the only available command is 'end'. Using the calculator will help determine if ending the turn is the optimal choice or if there's a better strategy based on deeper analysis.", "confidence": 0.8, "tool_name": "calculator", "tool_payload": {}, "commands": ["end"]}
 2026-03-31 17:41:49.500 | INFO     | rs.helper.logger:log:144 - BattleSubagent session ended: 8c7a1fcadee04ed1b6115dfaa09b7dbf
 2026-03-31 17:41:49.501 | INFO     | rs.helper.logger:log:144 - Missing relic names:pocketwatch

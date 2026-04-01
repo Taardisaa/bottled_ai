@@ -6,6 +6,7 @@ from typing import Callable
 
 from rs.api.client import Client
 from rs.helper.logger import log, init_log, log_new_run_sequence
+from rs.llm.config import load_llm_config
 from rs.llm.langmem_service import get_langmem_service, shutdown_langmem_service
 from rs.llm.run_context import DEFAULT_AGENT_IDENTITY
 from rs.machine.character import Character
@@ -79,6 +80,25 @@ def _parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
+
+def _assert_langmem_ready_or_fail(langmem_service: object) -> None:
+    config = load_llm_config()
+    if not config.langmem_enabled:
+        return
+
+    is_ready_callable = getattr(langmem_service, "is_ready", None)
+    is_ready = bool(is_ready_callable()) if callable(is_ready_callable) else False
+    if is_ready:
+        return
+
+    status_callable = getattr(langmem_service, "status", None)
+    status = status_callable() if callable(status_callable) else "unknown"
+    raise RuntimeError(
+        "LangMem is enabled but not ready: "
+        f"{status}. Fix embeddings setup or disable LangMem via LANGMEM_ENABLED=false."
+    )
+
+
 if __name__ == "__main__":
     args = _parse_args()
     selected_character = Character[args.character.upper()]
@@ -93,6 +113,7 @@ if __name__ == "__main__":
     try:
         client, langmem_service = initialize_client_and_langmem()
         log(f"LangMem status: {langmem_service.status()}")
+        _assert_langmem_ready_or_fail(langmem_service)
         threading.Thread(
             target=_run_preflight_in_background,
             name="llm-preflight",

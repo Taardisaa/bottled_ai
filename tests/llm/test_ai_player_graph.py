@@ -464,6 +464,7 @@ class TestAIPlayerGraph(unittest.TestCase):
         )
 
         state = load_resource_state("/event/divine_fountain.json")
+        state.json["available_commands"] = ["choose"]
         state.json["game_state"]["choice_list"] = ["leave"]
 
         self.assertTrue(graph.can_handle(state))
@@ -481,6 +482,7 @@ class TestAIPlayerGraph(unittest.TestCase):
         )
 
         state = load_resource_state("/event/divine_fountain.json")
+        state.json["available_commands"] = ["choose"]
         state.json["game_state"]["choice_list"] = ["leave"]
         next_state = load_resource_state("/event/divine_fountain.json")
         runtime = FakeBattleRuntime(state, next_state)
@@ -490,6 +492,124 @@ class TestAIPlayerGraph(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertTrue(result.handled)
         self.assertEqual([["choose 0"]], runtime.commands)
+
+    def test_multiple_available_commands_skips_deterministic_path(self):
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+        )
+        state = load_resource_state("/event/divine_fountain.json")
+        state.json["game_state"]["choice_list"] = ["leave"]
+        self.assertIsNone(graph._deterministic_single_command(state))
+
+    def test_single_non_choose_available_command_is_deterministic(self):
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+        )
+        state = load_resource_state("/event/divine_fountain.json")
+        state.json["available_commands"] = ["leave"]
+        self.assertEqual(["leave"], graph._deterministic_single_command(state))
+
+    def test_protocol_only_command_is_not_deterministic(self):
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+        )
+        state = load_resource_state("/event/divine_fountain.json")
+        state.json["available_commands"] = ["wait"]
+        self.assertIsNone(graph._deterministic_single_command(state))
+
+    def test_card_reward_choose_only_is_not_deterministic(self):
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+        )
+        state = load_resource_state("/card_reward/card_reward_take.json")
+        state.json["available_commands"] = ["choose"]
+        state.json["game_state"]["choice_list"] = ["pommel strike"]
+        self.assertIsNone(graph._deterministic_single_command(state))
+
+    def test_combat_reward_scope_is_not_deterministic(self):
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+        )
+        state = load_resource_state("/combat_reward/combat_reward_card.json")
+        state.json["available_commands"] = ["choose"]
+        state.json["game_state"]["choice_list"] = ["card"]
+        self.assertIsNone(graph._deterministic_single_command(state))
+
+    def test_forced_followup_replays_skip_once_on_card_reward(self):
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+        )
+        state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeBattleRuntime(state, state)
+        run_id = f"{str(state.game_state().get('class', 'unknown')).strip().lower()}:{str(state.game_state().get('seed', 'unknown')).strip().lower()}"
+        graph._last_card_reward_skip = {"run_id": run_id, "floor": state.floor()}
+        graph._last_card_reward_skip_consumed = False
+
+        result = graph.execute(state, runtime=runtime)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual([["skip", "wait 30"]], runtime.commands)
+        self.assertTrue(graph._last_card_reward_skip_consumed)
+
+    def test_forced_followup_proceeds_once_on_card_only_combat_reward(self):
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+        )
+        state = load_resource_state("/combat_reward/combat_reward_card.json")
+        runtime = FakeBattleRuntime(state, state)
+        run_id = f"{str(state.game_state().get('class', 'unknown')).strip().lower()}:{str(state.game_state().get('seed', 'unknown')).strip().lower()}"
+        graph._last_card_reward_skip = {"run_id": run_id, "floor": state.floor()}
+        graph._last_card_reward_skip_consumed = False
+
+        result = graph.execute(state, runtime=runtime)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual([["proceed"]], runtime.commands)
+        self.assertTrue(graph._last_card_reward_skip_consumed)
 
     def test_previously_unhandled_state_routes_to_generic_handler(self):
         graph = AIPlayerGraph(

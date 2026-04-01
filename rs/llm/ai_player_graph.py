@@ -63,6 +63,8 @@ GraphRoute = Literal[
     "decide_fallback",
 ]
 
+PROTOCOL_META_COMMANDS = {"key", "click", "wait", "state"}
+
 
 @dataclass
 class GraphExecutionResult:
@@ -139,6 +141,8 @@ class AIPlayerGraph:
             if astrolabe_transform_subagent is None else astrolabe_transform_subagent
         )
         self._action_policy = ActionPolicyRegistry()
+        self._last_card_reward_skip: dict[str, Any] | None = None
+        self._last_card_reward_skip_consumed: bool = False
         self._action_executor = UnifiedActionExecutor(
             battle_runner=self,
             campfire_runner=self,
@@ -158,7 +162,7 @@ class AIPlayerGraph:
         return self._config.enabled and self._config.ai_player_graph_enabled
 
     def can_handle(self, state: GameState) -> bool:
-        if self._deterministic_single_choice_commands(state) is not None:
+        if self._deterministic_single_command(state) is not None:
             return True
         return self._build_context(state) is not None
 
@@ -167,12 +171,12 @@ class AIPlayerGraph:
             self._trace_raw_event(event_type="graph_disabled", summary="ai player graph disabled by config")
             return None
 
-        deterministic_commands = self._deterministic_single_choice_commands(state)
+        deterministic_commands = self._deterministic_single_command(state)
         if deterministic_commands is not None:
             self._trace_raw_event(
                 event_type="graph_decide_success",
                 screen_type=state.screen_type(),
-                summary=f"deterministic_single_choice commands={deterministic_commands}",
+                summary=f"deterministic_single_command commands={deterministic_commands}",
             )
             return deterministic_commands
 
@@ -309,7 +313,7 @@ class AIPlayerGraph:
             output,
             event_type="graph_decide_success",
             thread_id=thread_id,
-            summary=f"commands={self._safe_preview(commands, 120)}",
+            summary=f"commands={self._safe_preview(commands, -1)}",
             metadata={"commands": [str(command) for command in commands]},
         )
         return [str(command) for command in commands]
@@ -322,7 +326,14 @@ class AIPlayerGraph:
         if not self.is_enabled():
             return None
 
-        deterministic_commands = self._deterministic_single_choice_commands(state)
+        followup_commands = self._forced_followup_commands_after_card_reward_skip(state)
+        if followup_commands is not None:
+            if runtime is None:
+                return GraphExecutionResult(handled=True, commands=followup_commands, final_state=state)
+            final_state = runtime.execute(followup_commands)
+            return GraphExecutionResult(handled=True, commands=None, final_state=final_state)
+
+        deterministic_commands = self._deterministic_single_command(state)
         if deterministic_commands is not None:
             if runtime is None:
                 return GraphExecutionResult(handled=True, commands=deterministic_commands, final_state=state)
@@ -408,9 +419,10 @@ class AIPlayerGraph:
     def _trace_enabled(self) -> bool:
         return bool(self._config.graph_trace_enabled)
 
-    def _safe_preview(self, value: Any, limit: int = 160) -> str:
+    def _safe_preview(self, value: Any, limit: int = -1) -> str:
+        """Whitespace-normalized string preview; ``limit <= 0`` (e.g. ``-1``) means no truncation."""
         text = str(value).replace("\r", " ").replace("\n", " ").strip()
-        if len(text) <= limit:
+        if limit <= 0 or len(text) <= limit:
             return text
         return text[: max(0, limit - 3)] + "..."
 
@@ -459,7 +471,7 @@ class AIPlayerGraph:
             validation_code=validation_code,
             proposed_command=proposed_command,
             confidence=confidence,
-            summary=self._safe_preview(summary, 220),
+            summary=self._safe_preview(summary, -1),
             metadata=dict(metadata or {}),
         )
 
@@ -574,20 +586,85 @@ class AIPlayerGraph:
             metadata=merged_metadata,
         )
 
-    def _is_single_choice_non_battle_bypass(self, state: GameState) -> bool:
-        return (
-            not is_battle_scope_state(state)
-            and not self._is_runtime_subagent_scope(state)
-            and state.has_command(Command.CHOOSE)
-            and len(state.get_choice_list()) <= 1
-        )
+    # def _is_single_choice_non_battle_bypass(self, state: GameState) -> bool:
+    #     return (
+    #         not is_battle_scope_state(state)
+    #         and not self._is_runtime_subagent_scope(state)
+    #         and state.has_command(Command.CHOOSE)
+    #         and len(state.get_choice_list()) <= 1
+    #     )
 
-    def _deterministic_single_choice_commands(self, state: GameState) -> list[str] | None:
-        if not state.has_command(Command.CHOOSE):
+    def _deterministic_single_command(self, state: GameState) -> list[str] | None:
+        """When exactly one protocol verb is available, return its command line without invoking the graph.
+
+        If multiple verbs are listed (e.g. choose and skip), the player still has a real decision; return None.
+        For ``choose``, requires exactly one entry in ``choice_list`` (emit ``choose 0``).
+        """
+        if state.screen_type() == ScreenType.CARD_REWARD.value:
             return None
-        if len(state.get_choice_list()) != 1:
+        if self._is_runtime_subagent_scope(state):
             return None
-        return ["choose 0"]
+
+        raw = state.json.get("available_commands")
+        if not isinstance(raw, list):
+            return None
+        verbs = [str(item).strip() for item in raw if str(item).strip()]
+        meaningful_verbs = [verb for verb in verbs if verb not in PROTOCOL_META_COMMANDS]
+        if len(meaningful_verbs) != 1:
+            return None
+        verb = meaningful_verbs[0]
+        if verb == Command.CHOOSE.value:
+            if len(state.get_choice_list()) != 1:
+                return None
+            return ["choose 0"]
+        return [verb]
+
+    def _forced_followup_commands_after_card_reward_skip(self, state: GameState) -> list[str] | None:
+        if not self._matches_last_card_reward_skip(state):
+            return None
+
+        available_commands = {
+            str(command).strip().lower()
+            for command in state.json.get("available_commands", [])
+            if str(command).strip() != ""
+        }
+        if state.screen_type() == ScreenType.CARD_REWARD.value and Command.SKIP.value in available_commands:
+            self._last_card_reward_skip_consumed = True
+            return [Command.SKIP.value, "wait 30"]
+
+        if (
+                state.screen_type() == ScreenType.COMBAT_REWARD.value
+                and Command.PROCEED.value in available_commands
+                and self._is_combat_reward_card_only_row(state)
+        ):
+            self._last_card_reward_skip_consumed = True
+            return [Command.PROCEED.value]
+
+        return None
+
+    def _matches_last_card_reward_skip(self, state: GameState) -> bool:
+        if self._last_card_reward_skip is None or self._last_card_reward_skip_consumed:
+            return False
+        if state.screen_type() not in {ScreenType.CARD_REWARD.value, ScreenType.COMBAT_REWARD.value}:
+            return False
+        return self._last_card_reward_skip.get("run_id", "") == self._state_run_id(state)
+
+    def _state_run_id(self, state: GameState) -> str:
+        game_state = state.game_state()
+        character_class = str(game_state.get("class", "unknown")).strip().lower()
+        seed = str(game_state.get("seed", "unknown")).strip().lower()
+        return f"{character_class}:{seed}"
+
+    def _is_combat_reward_card_only_row(self, state: GameState) -> bool:
+        if state.screen_type() != ScreenType.COMBAT_REWARD.value:
+            return False
+        rewards = state.screen_state().get("rewards", [])
+        if not isinstance(rewards, list) or len(rewards) != 1:
+            return False
+        reward = rewards[0]
+        if not isinstance(reward, dict):
+            return False
+        return str(reward.get("reward_type", "")).strip().upper() == "CARD"
 
     def _is_runtime_subagent_scope(self, state: GameState) -> bool:
         return (
@@ -754,8 +831,8 @@ class AIPlayerGraph:
             ),
             metadata={
                 "langmem_status": result["langmem_status"],
-                "episodic_preview": self._safe_preview(result["retrieved_episodic_memories"], 120),
-                "semantic_preview": self._safe_preview(result["retrieved_semantic_memories"], 120),
+                "episodic_preview": self._safe_preview(result["retrieved_episodic_memories"], -1),
+                "semantic_preview": self._safe_preview(result["retrieved_semantic_memories"], -1),
             },
         )
         return result
@@ -812,7 +889,7 @@ class AIPlayerGraph:
             summary=(
                 f"proposal={(proposal.proposed_command if proposal is not None else None)}, "
                 f"confidence={(proposal.confidence if proposal is not None else 0.0):.2f}, "
-                f"explanation={self._safe_preview((proposal.explanation if proposal is not None else ''), 100)}"
+                f"explanation={self._safe_preview((proposal.explanation if proposal is not None else ''), -1)}"
             ),
             metadata={"provider_metadata": dict(proposal.metadata) if proposal is not None else {}},
         )
@@ -840,7 +917,7 @@ class AIPlayerGraph:
             summary=(
                 f"proposal={(proposal.proposed_command if proposal is not None else None)}, "
                 f"confidence={(proposal.confidence if proposal is not None else 0.0):.2f}, "
-                f"explanation={self._safe_preview((proposal.explanation if proposal is not None else ''), 100)}"
+                f"explanation={self._safe_preview((proposal.explanation if proposal is not None else ''), -1)}"
             ),
             metadata={"provider_metadata": dict(proposal.metadata) if proposal is not None else {}},
         )
@@ -873,7 +950,7 @@ class AIPlayerGraph:
             summary=(
                 f"proposal={(proposal.proposed_command if proposal is not None else None)}, "
                 f"confidence={(proposal.confidence if proposal is not None else 0.0):.2f}, "
-                f"explanation={self._safe_preview((proposal.explanation if proposal is not None else ''), 100)}"
+                f"explanation={self._safe_preview((proposal.explanation if proposal is not None else ''), -1)}"
             ),
             metadata={"provider_metadata": dict(proposal.metadata) if proposal is not None else {}},
         )
@@ -901,7 +978,7 @@ class AIPlayerGraph:
             summary=(
                 f"proposal={(proposal.proposed_command if proposal is not None else None)}, "
                 f"confidence={(proposal.confidence if proposal is not None else 0.0):.2f}, "
-                f"explanation={self._safe_preview((proposal.explanation if proposal is not None else ''), 100)}"
+                f"explanation={self._safe_preview((proposal.explanation if proposal is not None else ''), -1)}"
             ),
             metadata={"provider_metadata": dict(proposal.metadata) if proposal is not None else {}},
         )
@@ -930,7 +1007,7 @@ class AIPlayerGraph:
             summary=(
                 f"proposal={(proposal.proposed_command if proposal is not None else None)}, "
                 f"confidence={(proposal.confidence if proposal is not None else 0.0):.2f}, "
-                f"explanation={self._safe_preview((proposal.explanation if proposal is not None else ''), 100)}"
+                f"explanation={self._safe_preview((proposal.explanation if proposal is not None else ''), -1)}"
             ),
             metadata={"provider_metadata": dict(proposal.metadata) if proposal is not None else {}},
         )
@@ -1122,7 +1199,7 @@ class AIPlayerGraph:
                 validation_code=validation.code,
                 proposed_command=proposed_command,
                 confidence=confidence,
-                summary=f"validation failed: {self._safe_preview(validation.message, 120)}",
+                summary=f"validation failed: {self._safe_preview(validation.message, -1)}",
                 metadata=metadata,
             )
             return result
@@ -1149,7 +1226,7 @@ class AIPlayerGraph:
                 validation_code=resolution.validation.code,
                 proposed_command=proposed_command,
                 confidence=confidence,
-                summary=f"validation failed: {self._safe_preview(resolution.validation.message, 120)}",
+                summary=f"validation failed: {self._safe_preview(resolution.validation.message, -1)}",
                 metadata=metadata,
             )
             return result
@@ -1172,7 +1249,7 @@ class AIPlayerGraph:
             validation_code=validation.code,
             proposed_command=proposed_command,
             confidence=confidence,
-            summary=f"validation ok, commands={self._safe_preview(commands, 100)}",
+            summary=f"validation ok, commands={self._safe_preview(commands, -1)}",
             metadata={"commands": list(commands), **metadata},
         )
         return result
@@ -1215,6 +1292,16 @@ class AIPlayerGraph:
             metadata=dict(state.get("metadata", {})),
         )
         self._langmem_service.record_accepted_decision(decision_context, decision)
+        if decision_context.handler_name == "CardRewardHandler":
+            if proposed_command == Command.SKIP.value:
+                self._last_card_reward_skip = {
+                    "run_id": self._run_id_from_context(decision_context),
+                    "floor": self._coerce_int(decision_context.game_state.get("floor")),
+                }
+                self._last_card_reward_skip_consumed = False
+            else:
+                self._last_card_reward_skip = None
+                self._last_card_reward_skip_consumed = False
 
         recent_key_decisions = self._trim_recent_decisions(state.get("recent_key_decisions", []))
         recent_key_decisions.append({
@@ -1243,7 +1330,7 @@ class AIPlayerGraph:
             summary=f"recorded decision, recent_count={len(recent_key_decisions)}",
             metadata={
                 "recent_count": len(recent_key_decisions),
-                "recent_preview": self._safe_preview(self._format_recent_decisions(recent_key_decisions), 140),
+                "recent_preview": self._safe_preview(self._format_recent_decisions(recent_key_decisions), -1),
             },
         )
         return result
@@ -1260,7 +1347,7 @@ class AIPlayerGraph:
             state,
             event_type="node_exit",
             node_name="emit_commands",
-            summary=f"commands={self._safe_preview(result['commands'], 120)}",
+            summary=f"commands={self._safe_preview(result['commands'], -1)}",
             metadata={"commands": result["commands"]},
         )
         return result

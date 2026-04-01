@@ -8,8 +8,11 @@ Rules:
 - If taking a card, proposed_command should usually be "choose <index>".
 - The index is 0-based and must match the Reward options list below.
 - Use the literal command "skip" when skipping is the best choice and skip is available.
+- Prefer taking a card by default; skip only when all offered cards are clearly low-value or harmful for this run.
 - Use provided card details and current deck/hand context to evaluate synergy before deciding to skip.
 - Do not default to 'skip' only because card names are unfamiliar.
+- Do not justify skip with generic claims like "deck is balanced", "deck efficiency", or "no synergy" without concrete card-specific evidence.
+- Compare all reward options and pick the relative best candidate before considering skip.
 - Deck has no hard card-count cap; never justify `skip` by saying the deck is \"full\".
 - Treat "deck is full" / "too many cards" as invalid reasoning; if you skip, justify by concrete tempo/synergy/value tradeoffs instead.
 - Ignore protocol-only commands like key, click, state, and bare wait unless the prompt explicitly requires them.

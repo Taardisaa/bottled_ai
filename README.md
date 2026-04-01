@@ -16,6 +16,9 @@ No, it can only see what the player does.
 ### What are its current limitations/capabilities?
 See [capabilities.md](docs/capabilities.md).
 
+### How does LangMem (episodic / semantic memory) work?
+See [langmem.md](docs/langmem.md).
+
 ### Do you make videos about the bot?
 Actually, yes. Check out the [YouTube channel](https://www.youtube.com/@BottledAI)!
 
