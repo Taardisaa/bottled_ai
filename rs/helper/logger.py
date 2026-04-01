@@ -65,7 +65,7 @@ def init_run_logging(seed: str):
     current_run_missing_events = set()
 
 
-def log_to_run(message: str):
+def log_to_run(message: str, console: bool = True):
     if not current_run_log_file:
         return
 
@@ -74,7 +74,7 @@ def log_to_run(message: str):
     if current_run_log_count > 10000:
         log("Dying due to this seeming to be stuck", current_run_log_file)
         raise Exception("Dying due to this seeming to be stuck...")
-    log(message, current_run_log_file)
+    log(message, current_run_log_file, console=console)
 
 
 def log_calculator_missing_relic(relic_id: str):
@@ -138,9 +138,10 @@ def log_new_run_sequence():
     _append_log_line("run_history", "-------------------------")
 
 
-def log(message: str, filename: str = "default"):
+def log(message: str, filename: str = "default", console: bool = True):
     _append_log_line(filename, message)
-    loguru_logger.info(message)
+    if console:
+        loguru_logger.info(message)
 
 
 def init_log(filename: str = "default"):

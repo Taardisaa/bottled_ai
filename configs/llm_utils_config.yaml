@@ -1,4 +1,4 @@
-fast_llm_model: qwen-mlx
+fast_llm_model: Qwen/Qwen3-32B
 llm_enable_thinking: false
 llm_two_layer_struct_convert: true
 # Use OpenRouter by setting fast_llm_model to openrouter/<provider>/<model>

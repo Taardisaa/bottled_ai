@@ -317,9 +317,22 @@ def _litellm_completion_kwargs(model: str, temperature: float, **extra_kwargs: A
     return kwargs
 
 
+def _is_qwen3_model(model: str) -> bool:
+    normalized = _normalize_model_for_tokenizer(model).lower()
+    return "qwen3" in normalized or "qwen/qwen3" in normalized
+
+
 def _should_send_qwen_thinking_toggle(model: str) -> bool:
     normalized = _normalize_model_for_tokenizer(model).lower()
-    return _has_custom_base_url() and "qwen" in normalized
+    return _has_custom_base_url() and "qwen" in normalized and not _is_qwen3_model(model)
+
+
+def _apply_qwen3_thinking_token(content: str, model: str, enable_thinking: bool) -> str:
+    """For Qwen3 models, append /think or /no_think token to the message content."""
+    if not _is_qwen3_model(model):
+        return content
+    token = "/think" if enable_thinking else "/no_think"
+    return f"{content} {token}"
 
 
 def _merge_extra_body(existing: Any, additions: Dict[str, Any]) -> Dict[str, Any]:
@@ -357,7 +370,10 @@ def _fallback_completion_kwargs_for_model_error(
     message = str(error).lower()
 
     # Some custom endpoints/proxies reject raw model ids without provider hint.
-    if "llm provider not provided" in message and "/" not in model:
+    # Models like "Qwen/Qwen3-32B" contain a slash but are not provider-prefixed.
+    known_prefixes = {f"{p}/" for p in _TOKENIZER_PROVIDER_PREFIXES}
+    has_provider_prefix = any(model.startswith(p) for p in known_prefixes)
+    if "llm provider not provided" in message and not has_provider_prefix:
         retry_kwargs = dict(kwargs)
         retry_kwargs["model"] = f"openai/{model}"
         logger.warning(f"Retrying completion with provider-prefixed model: {retry_kwargs['model']}")
@@ -453,7 +469,7 @@ def get_model_token_limit(model: str) -> int:
     if normalized_key.startswith("gpt-5"):
         return MODEL_TOKEN_LIMITS["gpt-5"]
 
-    return 8192
+    return 125600
 
 
 def count_tokens(text: str, model) -> int:
@@ -963,9 +979,10 @@ def _ask_llm_once_two_layer(
     )
 
     for first_pass_attempt in range(SECOND_LAYER_FIRST_PASS_RESTARTS + 1):
+        first_request_content = _apply_qwen3_thinking_token(message, model, config.llm_enable_thinking)
         first_raw = _call_litellm_quietly(
             completion,
-            messages=[{"role": "user", "content": message}],
+            messages=[{"role": "user", "content": first_request_content}],
             **first_kwargs,
         )
 
@@ -1011,9 +1028,10 @@ def _ask_llm_once_two_layer(
         second_prompt = _build_struct_convert_prompt(first_content_text, struct)
 
         for attempt in range(SECOND_LAYER_STRUCT_CONVERT_MAX_RETRIES):
+            second_request_content = _apply_qwen3_thinking_token(second_prompt, conversion_model, False)
             second_raw = _call_litellm_quietly(
                 completion,
-                messages=[{"role": "user", "content": second_prompt}],
+                messages=[{"role": "user", "content": second_request_content}],
                 **second_kwargs,
             )
             second_parsed, second_tokens = _parse_litellm_response(second_raw, struct)
@@ -1113,9 +1131,10 @@ def ask_llm_once(message: str,
                 enable_thinking=config.llm_enable_thinking,
             )
 
+            request_content = _apply_qwen3_thinking_token(message, model, config.llm_enable_thinking)
             raw_response = _call_litellm_quietly(
                 completion,
-                messages=[{"role": "user", "content": message}],
+                messages=[{"role": "user", "content": request_content}],
                 **completion_kwargs,
             )
             response_to_return, total_tokens = _parse_litellm_response(raw_response, struct)
@@ -1230,7 +1249,10 @@ def ask_llm_multi(messages: Sequence[Optional[str]], model: str = "gpt-5-mini",
             return responses, 0
 
         truncated_messages = [truncate_message(msg, model=model)[0] for msg in uncached_messages]
-        batch_payload = [[{"role": "user", "content": msg}] for msg in truncated_messages]
+        batch_payload = [
+            [{"role": "user", "content": _apply_qwen3_thinking_token(msg, model, config.llm_enable_thinking)}]
+            for msg in truncated_messages
+        ]
 
         response_format = struct if struct is not None and isinstance(struct, type) and issubclass(struct, BaseModel) else None
         completion_kwargs = _litellm_completion_kwargs(
@@ -1256,9 +1278,10 @@ def ask_llm_multi(messages: Sequence[Optional[str]], model: str = "gpt-5-mini",
             parsed_responses = []
             total_tokens = 0
             for msg in truncated_messages:
+                request_content = _apply_qwen3_thinking_token(msg, model, config.llm_enable_thinking)
                 raw = _call_litellm_quietly(
                     completion,
-                    messages=[{"role": "user", "content": msg}],
+                    messages=[{"role": "user", "content": request_content}],
                     **completion_kwargs,
                 )
                 parsed, token_count = _parse_litellm_response(raw, struct)

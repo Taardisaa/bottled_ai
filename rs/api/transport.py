@@ -5,10 +5,26 @@ import socket
 import sys
 from typing import IO, Protocol
 
+import json as _json
+from pathlib import Path
+
+from definitions import ROOT_DIR
 from rs.helper.logger import log, log_to_run
 
 
 COMMUNICATIONMOD_TRANSPORT_ENV = "COMMUNICATIONMOD_TRANSPORT"
+_EXCHANGE_LOG_PATH = Path(ROOT_DIR) / "logs" / "game_state_exchange.jsonl"
+
+
+def _append_exchange_jsonl(direction: str, message: str) -> None:
+    _EXCHANGE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        payload = _json.loads(message)
+    except (ValueError, TypeError):
+        payload = message
+    entry = _json.dumps({"direction": direction, "data": payload}, ensure_ascii=False)
+    with _EXCHANGE_LOG_PATH.open("a", encoding="utf-8") as f:
+        f.write(entry + "\n")
 COMMUNICATIONMOD_HOST_ENV = "COMMUNICATIONMOD_HOST"
 COMMUNICATIONMOD_PORT_ENV = "COMMUNICATIONMOD_PORT"
 COMMUNICATIONMOD_CONNECT_TIMEOUT_ENV = "COMMUNICATIONMOD_CONNECT_TIMEOUT_SECONDS"
@@ -34,7 +50,8 @@ def _log_exchange(message: str, *, incoming: bool, before_run: bool) -> None:
     if before_run:
         log(log_message)
     else:
-        log_to_run(log_message)
+        log_to_run(log_message, console=False)
+    _append_exchange_jsonl(prefix, message)
 
 
 def _send_and_receive_line(
