@@ -6,9 +6,10 @@ Decide reward-screen flow only. Do not invent future-state actions.
 
 ## Output Format (required)
 Return schema-valid JSON only:
-- `proposed_command`: one command string or null
+- `proposed_command`: one command string
 - `confidence`: number in [0, 1]
 - `explanation`: short, evidence-grounded reason for the selected command
+- Never return null/empty `proposed_command` when at least one legal action exists.
 
 ## Legal Commands and Exact Semantics
 - `choose <index>`:

@@ -208,5 +208,19 @@ class TestLangMemService(unittest.TestCase):
             service.shutdown(wait=True)
             self.assertFalse(db_path.exists())
 
+    def test_service_raises_when_embeddings_unavailable_and_fail_fast_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(RuntimeError) as raised:
+                BrokenEmbeddingsLangMemService(
+                    config=LlmConfig(
+                        enabled=True,
+                        langmem_enabled=True,
+                        langmem_sqlite_path=str(Path(tmp) / "memory.sqlite3"),
+                        langmem_fail_fast_init=True,
+                    ),
+                )
+
+            self.assertIn("LangMem initialization failed", str(raised.exception))
+
 if __name__ == "__main__":
     unittest.main()

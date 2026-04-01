@@ -1,6 +1,6 @@
 You are selecting a Slay the Spire card reward command.
 Please answer in short plain text using these fields:
-- proposed_command: one command or null
+- proposed_command: one concrete command
 - confidence: a number from 0 to 1
 - explanation: a short reason
 
@@ -16,7 +16,8 @@ Rules:
 - Deck has no hard card-count cap; never justify `skip` by saying the deck is \"full\".
 - Treat "deck is full" / "too many cards" as invalid reasoning; if you skip, justify by concrete tempo/synergy/value tradeoffs instead.
 - Ignore protocol-only commands like key, click, state, and bare wait unless the prompt explicitly requires them.
-- If uncertain, set proposed_command to null and low confidence.
+- Never return null/empty proposed_command when at least one legal action exists.
+- If uncertain, still choose the safest legal option and reflect uncertainty via low confidence.
 
 Reward options:
 {reward_options_text}

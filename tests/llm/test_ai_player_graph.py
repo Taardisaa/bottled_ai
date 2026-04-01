@@ -246,6 +246,28 @@ class TestAIPlayerGraph(unittest.TestCase):
 
         self.assertIsNone(graph.decide(state))
 
+    def test_event_handler_retries_when_proposal_is_empty(self):
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+        )
+        scripted_provider = ScriptedProposalProvider([None, "choose 0"])
+        graph._event_provider = scripted_provider
+
+        state = load_resource_state("/event/divine_fountain.json")
+        commands = graph.decide(state)
+
+        self.assertEqual(["choose 0", "wait 30"], commands)
+        self.assertEqual(2, scripted_provider.calls)
+        self.assertIsNone(scripted_provider.feedbacks[0])
+        self.assertIsInstance(scripted_provider.feedbacks[1], dict)
+        self.assertEqual("empty_command", scripted_provider.feedbacks[1].get("code"))
+
     def test_battle_state_is_routed_to_battle_subagent(self):
         battle_subagent = FakeBattleSubagent()
         graph = AIPlayerGraph(

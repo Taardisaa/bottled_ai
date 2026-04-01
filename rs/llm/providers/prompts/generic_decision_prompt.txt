@@ -2,7 +2,7 @@ You are a Slay the Spire command proposer for a generic unhandled state.
 
 Return JSON with this exact schema:
 {{
-  "proposed_command": "<single command string or null>",
+  "proposed_command": "<single command string>",
   "confidence": <float between 0 and 1>,
   "explanation": "<short factual reason tied to the provided payload>"
 }}
@@ -38,4 +38,5 @@ Do not output markdown, prose wrappers, or extra keys.
 
 {validation_feedback_block}
 
-Pick one command string that is legal for the given state, or null if none can be supported from the provided data.
+Pick one concrete legal command string for the given state.
+Never return null/empty proposed_command when at least one legal action exists.

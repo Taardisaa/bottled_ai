@@ -1044,8 +1044,16 @@ class AIPlayerGraph:
                 break
             proposed_command = proposal.proposed_command
             if proposed_command is None:
-                proposal_validated = True
-                break
+                validation_feedback = {
+                    "code": "empty_command",
+                    "message": (
+                        "proposed_command cannot be null. Return exactly one concrete, legal command "
+                        "for the current state."
+                    ),
+                    "allowed_commands": [str(command) for command in decision_context.available_commands],
+                    "choice_list": [str(choice) for choice in decision_context.choice_list],
+                }
+                continue
 
             validation, feedback = validate_proposed_command(decision_context, proposed_command)
             if validation.is_valid:
@@ -1073,7 +1081,7 @@ class AIPlayerGraph:
                 {"validation_error": "provider_unavailable"},
             )
 
-        if not proposal_validated and validation_feedback is not None and proposal.proposed_command is not None:
+        if not proposal_validated and validation_feedback is not None:
             metadata = dict(getattr(proposal, "metadata", {}))
             metadata["validation_feedback"] = dict(validation_feedback)
             metadata["validation_error"] = failure_code

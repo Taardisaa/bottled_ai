@@ -98,16 +98,16 @@ class Game:
                 if graph_handled:
                     handled = True
                     continue
-                for handler in DEFAULT_GAME_HANDLERS:
-                    if handler.can_handle(self.last_state):
-                        log_to_run("Handler: " + str(handler))
-                        action = handler.handle(self.last_state)
-                        if not action:
-                            continue
-                        for command in action.commands:
-                            self.__send_command(command)
-                        handled = True
-                        break
+                # for handler in DEFAULT_GAME_HANDLERS:
+                #     if handler.can_handle(self.last_state):
+                #         log_to_run("Handler: " + str(handler))
+                #         action = handler.handle(self.last_state)
+                #         if not action:
+                #             continue
+                #         for command in action.commands:
+                #             self.__send_command(command)
+                #         handled = True
+                #         break
                 if not handled:
                     log_to_run("Dying from not knowing what to do next")
                     raise Exception("ah I didn't know what to do!")
@@ -175,6 +175,12 @@ class Game:
         screen_state = game_state.get("screen_state", {})
         score = screen_state.get("score") if isinstance(screen_state, dict) else None
 
+        log_to_run(
+            "Run finished: "
+            f"floor={floor if floor is not None else 'unknown'}, "
+            f"score={score if score is not None else 'unknown'}"
+        )
+
         context = AgentContext(
             handler_name="RunFinalizer",
             screen_type=screen_type,
@@ -198,7 +204,6 @@ class Game:
         payload = {
             "floor": floor,
             "score": score,
-            "victory": not bool(raw_state.get("in_game", False)),
             "bosses": list(self.run_bosses),
             "elites": list(self.run_elites),
             "run_memory_summary": context.extras["run_memory_summary"],

@@ -1,3 +1,4 @@
+import copy
 import unittest
 
 from rs.llm.battle_subagent import BattleSubagent, BattleSubagentConfig
@@ -9,6 +10,7 @@ from rs.llm.battle_tools import (
     ValidateBattleCommandTool,
 )
 from rs.llm.providers.battle_llm_provider import BattleDirective
+from rs.machine.state import GameState
 from test_helpers.resources import load_resource_state
 
 
@@ -216,6 +218,38 @@ class TestBattleSubagent(unittest.TestCase):
         self.assertTrue(result.handled)
         self.assertEqual(1, len(runtime.command_batches))
         self.assertEqual(2, len(provider.validation_feedbacks))
+
+    def test_subagent_breaks_repeated_choose_loop_with_progression_fallback(self):
+        langmem_service = FakeLangMemService()
+        provider = ScriptedBattleProvider([
+            BattleDirective(mode="action", explanation="choose card", confidence=0.8, commands=["choose 1"]),
+            BattleDirective(mode="action", explanation="choose card again", confidence=0.8, commands=["choose 1"]),
+            BattleDirective(mode="action", explanation="should be bypassed", confidence=0.8, commands=["choose 1"]),
+        ])
+        subagent = build_battle_subagent(provider, langmem_service)
+
+        stalled_source = load_resource_state("battles/general/discard.json")
+        stalled_payload = copy.deepcopy(stalled_source.json)
+        stalled_payload["available_commands"] = ["choose", "confirm", "wait", "state"]
+        stalled_state = GameState(copy.deepcopy(stalled_payload))
+
+        runtime = FakeBattleRuntime(
+            stalled_state,
+            [
+                GameState(copy.deepcopy(stalled_payload)),
+                GameState(copy.deepcopy(stalled_payload)),
+                load_resource_state("/card_reward/card_reward_take.json"),
+            ],
+        )
+
+        result = subagent.run(stalled_state, runtime)
+
+        self.assertTrue(result.handled)
+        self.assertEqual("CARD_REWARD", result.final_state.screen_type())
+        self.assertEqual(["choose 1"], runtime.command_batches[0])
+        self.assertEqual(["choose 1"], runtime.command_batches[1])
+        self.assertEqual(["confirm"], runtime.command_batches[2])
+        self.assertLessEqual(len(runtime.command_batches), 3)
 
 
 if __name__ == "__main__":

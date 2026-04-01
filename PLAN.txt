@@ -96,3 +96,83 @@ zsh: abort      mlx_lm.server --model Qwen/Qwen3-8B-MLX-4bit --host 127.0.0.1 --
 KeyError: 'game_state'
 
 
+2026-04-01 00:01:17.980 | INFO     | rs.helper.logger:log:144 - Traceback (most recent call last):
+  File "D:/Software/Steam/steamapps/common/SlayTheSpire/bottled_ai/main.py", line 130, in <module>
+    game.run()
+    ~~~~~~~~^^
+  File "D:\Software/Steam/steamapps/common/SlayTheSpire/bottled_ai\rs\machine\game.py", line 97, in run
+    graph_handled = self.__decide_with_ai_player_graph()
+  File "D:\Software/Steam/steamapps/common/SlayTheSpire/bottled_ai\rs\machine\game.py", line 222, in __decide_with_ai_player_graph
+    result = ai_player_graph.execute(self.last_state, runtime=_GameBattleRuntimeAdapter(self))
+  File "D:\Software/Steam/steamapps/common/SlayTheSpire/bottled_ai\rs\llm\ai_player_graph.py", line 355, in execute
+    session = self._action_executor.execute(state, runtime)
+  File "D:\Software/Steam/steamapps/common/SlayTheSpire/bottled_ai\rs\llm\action_executor.py", line 62, in execute
+    result = self._battle_runner.run(state, runtime)
+  File "D:\Software/Steam/steamapps/common/SlayTheSpire/bottled_ai\rs\llm\ai_player_graph.py", line 1445, in run
+    session_result = self._battle_subagent.run(state, runtime)
+  File "D:\Software/Steam/steamapps/common/SlayTheSpire/bottled_ai\rs\llm\battle_subagent.py", line 108, in run
+    output = dict(self.get_compiled_graph().invoke({
+                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+        "runtime": runtime,
+        ^^^^^^^^^^^^^^^^^^^
+        "current_state": state,
+        ^^^^^^^^^^^^^^^^^^^^^^^
+    }))
+    ^^
+  File "D:\Software\Steam\steamapps\common\SlayTheSpire\bottled_ai\venv\Lib\site-packages\langgraph\pregel\main.py", line 3071, in invoke
+    for chunk in self.stream(
+                 ~~~~~~~~~~~^
+        input,
+        ^^^^^^
+    ...<10 lines>...
+        **kwargs,
+        ^^^^^^^^^
+    ):
+    ^
+  File "D:\Software\Steam\steamapps\common\SlayTheSpire\bottled_ai\venv\Lib\site-packages\langgraph\pregel\main.py", line 2646, in stream
+    for _ in runner.tick(
+             ~~~~~~~~~~~^
+        [t for t in loop.tasks.values() if not t.writes],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        schedule_task=loop.accept_push,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ):
+    ^
+  File "D:\Software\Steam\steamapps\common\SlayTheSpire\bottled_ai\venv\Lib\site-packages\langgraph\pregel\_runner.py", line 167, in tick
+    run_with_retry(
+    ~~~~~~~~~~~~~~^
+        t,
+        ^^
+    ...<10 lines>...
+        },
+        ^^
+    )
+    ^
+  File "D:\Software\Steam\steamapps\common\SlayTheSpire\bottled_ai\venv\Lib\site-packages\langgraph\pregel\_retry.py", line 42, in run_with_retry
+    return task.proc.invoke(task.input, config)
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "D:\Software\Steam\steamapps\common\SlayTheSpire\bottled_ai\venv\Lib\site-packages\langgraph\_internal\_runnable.py", line 656, in invoke
+    input = context.run(step.invoke, input, config, **kwargs)
+  File "D:\Software\Steam\steamapps\common\SlayTheSpire\bottled_ai\venv\Lib\site-packages\langgraph\_internal\_runnable.py", line 400, in invoke
+    ret = self.func(*args, **kwargs)
+  File "D:\Software/Steam/steamapps/common/SlayTheSpire/bottled_ai\rs\llm\battle_subagent.py", line 479, in _action_commit_node
+    result = executor.run(context, {"commands": commands})
+  File "D:\Software/Steam/steamapps/common/SlayTheSpire/bottled_ai\rs\llm\battle_tools.py", line 186, in run
+    next_state = runtime.execute(validation["commands"])
+  File "D:\Software/Steam/steamapps/common/SlayTheSpire/bottled_ai\rs\machine\game.py", line 48, in execute
+    self._game._execute_runtime_command(command)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "D:\Software/Steam/steamapps/common/SlayTheSpire/bottled_ai\rs\machine\game.py", line 130, in _execute_runtime_command
+    self.__send_command(command)
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "D:\Software/Steam/steamapps/common/SlayTheSpire/bottled_ai\rs\machine\game.py", line 118, in __send_command
+    self.last_state = GameState(json.loads(self.client.send_message(command)))
+                                           ~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "D:\Software/Steam/steamapps/common/SlayTheSpire/bottled_ai\rs\api\client.py", line 23, in send_message
+    self._validate_protocol_response(response)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "D:\Software/Steam/steamapps/common/SlayTheSpire/bottled_ai\rs\api\client.py", line 33, in _validate_protocol_response
+    raise ProtocolError(f"CommunicationMod returned error response: {payload['error']}")
+rs.api.transport.ProtocolError: CommunicationMod returned error response: Selected card cannot be played with the selected target.
+During task with name 'action_commit' and id '1e8118b7-3494-e379-e401-feef1e71fc86'

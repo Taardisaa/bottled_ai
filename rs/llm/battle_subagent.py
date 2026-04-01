@@ -26,6 +26,7 @@ class BattleToolProtocol:
 class BattleSubagentState(TypedDict, total=False):
     runtime: BattleRuntimeAdapter
     current_state: GameState
+    current_state_signature: str
     current_context: AgentContext
     working_memory: dict[str, Any]
     session_id: str
@@ -49,6 +50,7 @@ class BattleSubagentConfig:
     max_tool_calls: int = 24
     fallback_max_path_count: int = 200
     max_validation_attempts: int = 2
+    no_progress_limit: int = 2
 
 
 @dataclass
@@ -62,6 +64,9 @@ class BattleWorkingMemory:
     langmem_status: str = "disabled_by_config"
     tool_call_count: int = 0
     decision_loop_count: int = 0
+    no_progress_count: int = 0
+    last_state_signature: str = ""
+    last_executed_batch: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -74,6 +79,9 @@ class BattleWorkingMemory:
             "langmem_status": self.langmem_status,
             "tool_call_count": self.tool_call_count,
             "decision_loop_count": self.decision_loop_count,
+            "no_progress_count": self.no_progress_count,
+            "last_state_signature": self.last_state_signature,
+            "last_executed_batch": list(self.last_executed_batch),
         }
 
 
@@ -205,10 +213,15 @@ class BattleSubagent:
             retrieved_semantic_memories=str(working_memory.get("retrieved_semantic_memories", "none")),
             langmem_status=str(working_memory.get("langmem_status", self._langmem_service.status())),
         )
+        current_signature = self._state_signature(current_state)
+        if not str(working_memory.get("last_state_signature", "")).strip():
+            working_memory["last_state_signature"] = current_signature
         battle_complete = not is_battle_scope_state(current_state)
         return {
             "current_state": current_state,
+            "current_state_signature": current_signature,
             "current_context": context,
+            "working_memory": working_memory,
             "battle_complete": battle_complete,
             "action_committed": False,
         }
@@ -219,6 +232,27 @@ class BattleSubagent:
 
         if bool(state.get("battle_complete")):
             directive = BattleDirective(mode="stop", explanation="battle_scope_ended", confidence=1.0)
+            return {"directive": directive, "working_memory": working_memory}
+
+        no_progress_count = int(working_memory.get("no_progress_count", 0))
+        if no_progress_count >= self._config.no_progress_limit:
+            context = state["current_context"]
+            last_batch = [str(command) for command in working_memory.get("last_executed_batch", []) if str(command).strip()]
+            fallback_commands = self._build_guardrail_fallback_commands(
+                context,
+                prefer_progression=True,
+                rejected_batches=[last_batch] if last_batch else None,
+            )
+            working_memory = self._append_step_summary(
+                working_memory,
+                f"no-progress guardrail triggered after {no_progress_count} repeated signatures",
+            )
+            directive = BattleDirective(
+                mode="action" if fallback_commands else "stop",
+                explanation="battle_subagent_no_progress_guardrail",
+                confidence=0.25,
+                commands=fallback_commands,
+            )
             return {"directive": directive, "working_memory": working_memory}
 
         if int(working_memory.get("decision_loop_count", 0)) > self._config.max_decision_loops:
@@ -448,6 +482,21 @@ class BattleSubagent:
             return {"working_memory": working_memory, "action_committed": False}
 
         working_memory = dict(state["working_memory"])
+        previous_signature = str(state.get("current_state_signature", ""))
+        next_state = cast(GameState, result.get("state", state["current_state"]))
+        next_signature = self._state_signature(next_state)
+        no_progress_count = int(working_memory.get("no_progress_count", 0))
+        if previous_signature and previous_signature == next_signature:
+            no_progress_count += 1
+            working_memory = self._append_step_summary(
+                working_memory,
+                f"no progress detected after commands: {', '.join(commands)}",
+            )
+        else:
+            no_progress_count = 0
+        working_memory["no_progress_count"] = no_progress_count
+        working_memory["last_state_signature"] = next_signature
+        working_memory["last_executed_batch"] = list(commands)
         working_memory.setdefault("executed_command_batches", []).append(commands)
         working_memory = self._append_step_summary(working_memory, f"executed command batch: {', '.join(commands)}")
         self._record_accepted_decision(
@@ -458,7 +507,8 @@ class BattleSubagent:
             list(state.get("pending_required_tools_used", [])),
         )
         return {
-            "current_state": cast(GameState, result.get("state", state["current_state"])),
+            "current_state": next_state,
+            "current_state_signature": next_signature,
             "working_memory": working_memory,
             "pending_required_tools_used": [],
             "action_committed": True,
@@ -523,12 +573,43 @@ class BattleSubagent:
             "retrieve_battle_experience": "Retrieve relevant LangMem episodic and semantic battle memories.",
         }
 
-    def _build_guardrail_fallback_commands(self, context: AgentContext) -> list[str]:
+    def _build_guardrail_fallback_commands(
+            self,
+            context: AgentContext,
+            *,
+            prefer_progression: bool = False,
+            rejected_batches: list[list[str]] | None = None,
+    ) -> list[str]:
         calculator_tool = self._tools.get("analyze_with_calculator")
         validator_tool = self._tools.get("validate_battle_command")
+        if validator_tool is None:
+            return []
+
+        rejected = {
+            tuple(str(command).strip() for command in batch if str(command).strip())
+            for batch in (rejected_batches or [])
+            if batch
+        }
+
+        progression_candidates = [["confirm"], ["proceed"]]
+        if prefer_progression:
+            for candidate in progression_candidates:
+                normalized = tuple(candidate)
+                if normalized in rejected:
+                    continue
+                validation = validator_tool.run(context, {"commands": candidate})
+                if bool(validation.get("is_valid")):
+                    return candidate
+
         if calculator_tool is not None and validator_tool is not None:
             calculator_result = calculator_tool.run(context, {"max_path_count": self._config.fallback_max_path_count})
             recommended_commands = [str(command) for command in calculator_result.get("recommended_commands", [])]
+            if recommended_commands:
+                normalized = tuple(command.strip() for command in recommended_commands if command.strip())
+                if normalized in rejected:
+                    recommended_commands = []
+                if prefer_progression and recommended_commands and self._is_choose_only_batch(recommended_commands):
+                    recommended_commands = []
             if recommended_commands:
                 validation = validator_tool.run(context, {"commands": recommended_commands})
                 if bool(validation.get("is_valid")):
@@ -537,8 +618,14 @@ class BattleSubagent:
         enumerate_tool = self._tools.get("enumerate_legal_actions")
         if enumerate_tool is not None and validator_tool is not None:
             legal = enumerate_tool.run(context, {})
-            for command in legal.get("commands", []):
+            commands = [str(command) for command in legal.get("commands", [])]
+            if prefer_progression:
+                commands = sorted(commands, key=lambda command: 1 if command.startswith("choose ") else 0)
+            for command in commands:
                 candidate = [str(command)]
+                normalized = tuple(item.strip() for item in candidate if item.strip())
+                if normalized in rejected:
+                    continue
                 validation = validator_tool.run(context, {"commands": candidate})
                 if bool(validation.get("is_valid")):
                     return candidate
@@ -593,3 +680,35 @@ class BattleSubagent:
         working_memory.setdefault("recent_step_summaries", []).append(summary)
         working_memory["recent_step_summaries"] = working_memory["recent_step_summaries"][-12:]
         return working_memory
+
+    @staticmethod
+    def _state_signature(state: GameState) -> str:
+        game_state = state.game_state()
+        screen_state_raw = game_state.get("screen_state", {})
+        screen_state = screen_state_raw if isinstance(screen_state_raw, dict) else {}
+        selected = screen_state.get("selected", [])
+        selected_marker: tuple[str, ...] = tuple(
+            f"{str(card.get('uuid', ''))}:{str(card.get('id', ''))}:{str(card.get('name', ''))}"
+            for card in selected
+            if isinstance(card, dict)
+        ) if isinstance(selected, list) else tuple()
+        available_commands_raw = state.json.get("available_commands", [])
+        available_commands = tuple(
+            sorted(str(command).strip() for command in available_commands_raw if str(command).strip())
+        ) if isinstance(available_commands_raw, list) else tuple()
+        choice_list = tuple(str(choice).strip().lower() for choice in state.get_choice_list())
+        signature = (
+            str(game_state.get("screen_type", "")),
+            available_commands,
+            str(game_state.get("current_action", "")),
+            int(screen_state.get("max_cards", 0)) if isinstance(screen_state.get("max_cards", 0), int) else 0,
+            bool(screen_state.get("can_pick_zero", False)),
+            selected_marker,
+            choice_list,
+        )
+        return str(signature)
+
+    @staticmethod
+    def _is_choose_only_batch(commands: list[str]) -> bool:
+        normalized = [str(command).strip() for command in commands if str(command).strip()]
+        return bool(normalized) and all(command.startswith("choose ") for command in normalized)

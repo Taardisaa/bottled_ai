@@ -12,6 +12,7 @@ Rules:
 - Treat `choice_list` as the source of truth for executable indices.
 - If `choice_metadata_mismatch` is true, do not trust `screen_state.relics` for indices.
 - Consider current relics, deck profile, act, floor, energy tradeoffs, and anti-synergies such as Snecko Eye with Runic Pyramid only when supported by the payload.
+- Never return null/empty `proposed_command` when at least one legal action exists.
 - Return only schema-valid JSON.
 
 Payload:

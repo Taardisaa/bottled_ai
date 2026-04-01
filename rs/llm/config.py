@@ -31,6 +31,7 @@ class LlmConfig:
     langmem_top_k: int = 3
     langmem_reflection_batch_size: int = 5
     langmem_max_semantic_memories_per_namespace: int = 50
+    langmem_fail_fast_init: bool = False
 
     def __post_init__(self):
         """Normalize mutable defaults after dataclass initialization.
@@ -105,6 +106,7 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
     langmem_max_semantic_memories_per_namespace_default = int(
         langmem_values.get("max_semantic_memories_per_namespace", 50)
     )
+    langmem_fail_fast_init_default = bool(langmem_values.get("fail_fast_init", False))
 
     enabled = _parse_bool(os.environ.get("LLM_ENABLED"), enabled_default)
     enabled_handlers = _parse_handlers(os.environ.get("LLM_ENABLED_HANDLERS"), enabled_handlers_default)
@@ -146,6 +148,10 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
             str(langmem_max_semantic_memories_per_namespace_default),
         )
     )
+    langmem_fail_fast_init = _parse_bool(
+        os.environ.get("LANGMEM_FAIL_FAST_INIT"),
+        langmem_fail_fast_init_default,
+    )
 
     return LlmConfig(
         enabled=enabled,
@@ -166,4 +172,5 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
         langmem_top_k=langmem_top_k,
         langmem_reflection_batch_size=langmem_reflection_batch_size,
         langmem_max_semantic_memories_per_namespace=langmem_max_semantic_memories_per_namespace,
+        langmem_fail_fast_init=langmem_fail_fast_init,
     )

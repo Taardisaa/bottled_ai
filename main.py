@@ -19,8 +19,10 @@ run_seeds = [
     # 'LGZ12EEMFGUK',
     "114514"
 ]
-DEFAULT_RUN_AMOUNT = 1
-DEFAULT_CHARACTER = Character.WATCHER
+
+DEFAULT_RUN_AMOUNT = 50
+# DEFAULT_CHARACTER = Character.WATCHER
+DEFAULT_CHARACTER = Character.IRONCLAD
 
 
 def initialize_client_and_langmem(
@@ -121,12 +123,15 @@ if __name__ == "__main__":
         ).start()
         game = Game(client, selected_character)
         if selected_seeds:
-            for seed in selected_seeds:
-                game.start(seed)
-                game.run()
-                time.sleep(1)
+            for idx in range(selected_run_amount):
+                for seed in selected_seeds:
+                    log(f"Running game {idx+1}/{selected_run_amount} with seed {seed}")
+                    game.start(seed)
+                    game.run()
+                    time.sleep(1)
         else:
-            for _ in range(selected_run_amount):
+            for idx in range(selected_run_amount):
+                log(f"Running game {idx+1}/{selected_run_amount} with random seed")
                 game.start(make_random_seed())
                 game.run()
                 time.sleep(1)

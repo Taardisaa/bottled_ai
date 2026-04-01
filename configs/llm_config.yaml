@@ -17,3 +17,4 @@ langmem:
   top_k: 5
   reflection_batch_size: 8
   max_semantic_memories_per_namespace: 200
+  fail_fast_init: true

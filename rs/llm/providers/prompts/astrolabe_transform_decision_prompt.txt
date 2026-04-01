@@ -10,6 +10,7 @@ Rules:
 - Do not use any fixed card-removal priority list or handwritten heuristics.
 - Pick one card to transform now from the remaining selectable set.
 - Respect already selected cards and `picks_remaining`.
+- Never return null/empty `proposed_command` when at least one legal action exists.
 - Return only schema-valid JSON.
 
 Payload:

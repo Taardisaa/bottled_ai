@@ -20,6 +20,7 @@ from langgraph.store.base import SearchItem
 from langgraph.store.memory import InMemoryStore
 from langmem import create_memory_store_manager
 
+from rs.helper.logger import log_to_run
 from rs.llm.agents.base_agent import AgentContext, AgentDecision
 from rs.llm.config import LlmConfig
 from rs.utils.config import config as llm_runtime_config
@@ -236,6 +237,8 @@ class LangMemService:
             self._status = "embeddings_unavailable"
             self._status_detail = str(e)
             self._store = None
+            if self._config.langmem_fail_fast_init:
+                raise RuntimeError(f"LangMem initialization failed: {self.status()}") from e
 
     def _build_embeddings_client(self) -> Embeddings:
         if self._embeddings_client is not None:
@@ -318,10 +321,22 @@ class LangMemService:
             episodic_items = self._store.search(episodic_namespace, query=query, limit=self._config.langmem_top_k)
             semantic_items = self._store.search(semantic_namespace, query=query, limit=self._config.langmem_top_k)
 
+        retrieved_episodic_memories = self._format_search_results(episodic_items, "EP")
+        retrieved_semantic_memories = self._format_search_results(semantic_items, "SEM")
+        langmem_status = self.status()
+        log_to_run(
+            "LangMem retrieval | "
+            f"handler={context.handler_name} | "
+            f"run_namespace={episodic_namespace} | "
+            f"semantic_namespace={semantic_namespace} | "
+            f"episodic={retrieved_episodic_memories} | "
+            f"semantic={retrieved_semantic_memories} | "
+            f"status={langmem_status}"
+        )
         return {
-            "retrieved_episodic_memories": self._format_search_results(episodic_items, "EP"),
-            "retrieved_semantic_memories": self._format_search_results(semantic_items, "SEM"),
-            "langmem_status": self.status(),
+            "retrieved_episodic_memories": retrieved_episodic_memories,
+            "retrieved_semantic_memories": retrieved_semantic_memories,
+            "langmem_status": langmem_status,
         }
 
     def record_accepted_decision(self, context: AgentContext, decision: AgentDecision) -> None:
@@ -546,13 +561,12 @@ class LangMemService:
     @staticmethod
     def _build_run_finalization_summary(payload: dict[str, Any]) -> str:
         floor = payload.get("floor", "unknown")
-        victory = bool(payload.get("victory", False))
         score = payload.get("score", "unknown")
         bosses = ", ".join(payload.get("bosses", [])) or "none"
         elites = ", ".join(payload.get("elites", [])) or "none"
         return (
             f"Run ended on floor {floor} with score {score}. "
-            f"Victory={victory}. Bosses seen: {bosses}. Elites seen: {elites}. "
+            f"Bosses seen: {bosses}. Elites seen: {elites}. "
             f"Summary: {payload.get('run_memory_summary', '')}"
         )
 
