@@ -600,6 +600,10 @@ class AIPlayerGraph:
         If multiple verbs are listed (e.g. choose and skip), the player still has a real decision; return None.
         For ``choose``, requires exactly one entry in ``choice_list`` (emit ``choose 0``).
         """
+        # SHOP_ROOM: always open the shop so ShopPurchaseHandler handles SHOP_SCREEN.
+        if state.screen_type() == ScreenType.SHOP_ROOM.value and state.has_command(Command.CHOOSE):
+            return ["choose 0"]
+
         if state.screen_type() == ScreenType.CARD_REWARD.value:
             return None
         if self._is_runtime_subagent_scope(state):
@@ -708,6 +712,9 @@ class AIPlayerGraph:
 
         if state.screen_type() == ScreenType.SHOP_SCREEN.value:
             return build_shop_purchase_agent_context(state, "ShopPurchaseHandler")
+
+        if state.screen_type() == ScreenType.SHOP_ROOM.value:
+            return None  # handled deterministically: open shop via choose 0
 
         if state.has_command(Command.CHOOSE) and state.screen_type() == ScreenType.CARD_REWARD.value and (
                 state.game_state()["room_phase"] == "COMPLETE"

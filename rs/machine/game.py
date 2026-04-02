@@ -3,6 +3,7 @@ import json
 from typing import Any, Optional
 
 from rs.api.client import Client
+from rs.game.screen_type import ScreenType
 from rs.helper.controller import await_controller
 from rs.helper.logger import init_run_logging, log_to_run
 from rs.helper.seed import get_seed_string
@@ -20,7 +21,10 @@ from rs.machine.handlers.default_leave import DefaultLeaveHandler
 from rs.machine.handlers.default_play import DefaultPlayHandler
 from rs.machine.handlers.default_shop import DefaultShopHandler
 from rs.machine.handlers.default_wait import DefaultWaitHandler
+from rs.machine.command import Command
 from rs.machine.state import GameState
+
+_NO_PROGRESS_LIMIT = 3
 
 DEFAULT_GAME_HANDLERS = [
     DefaultLeaveHandler(),
@@ -60,6 +64,7 @@ class Game:
         self.game_over_handler: DefaultGameOverHandler = DefaultGameOverHandler()
         # Communication Mod may omit ``game_state`` after run teardown (e.g. after game-over ``proceed``).
         self._langmem_last_game_state: Optional[dict[str, Any]] = None
+        self._no_progress_count: int = 0
 
     def start(self, seed: str = ""):
         set_current_agent_identity(DEFAULT_AGENT_IDENTITY)
@@ -74,6 +79,26 @@ class Game:
         state_seed = get_seed_string(self.last_state.game_state()['seed'])
         init_run_logging(state_seed)
         self.__send_command("choose 0")
+
+    def _state_fingerprint(self) -> str:
+        gs = self.last_state.game_state()
+        choice_list = getattr(self.last_state, 'get_choice_list', lambda: [])()
+        return (
+            f"{self.last_state.screen_type()}"
+            f"|{choice_list}"
+            f"|{gs.get('room_phase', '')}"
+            f"|{self.last_state.floor()}"
+        )
+
+    def _force_escape_loop(self):
+        """Try safe fallback commands to break out of a stuck state."""
+        for cmd in (Command.PROCEED, Command.SKIP, Command.CANCEL, Command.LEAVE, Command.CONFIRM):
+            if self.last_state.has_command(cmd):
+                log_to_run(f"Loop escape: forcing '{cmd.value}'")
+                self.__send_command(cmd.value)
+                return
+        log_to_run("Loop escape: no safe fallback command available")
+        raise Exception("Stuck in a loop with no fallback command available")
 
     def run(self):
         log_to_run("Starting Run")
@@ -94,8 +119,21 @@ class Game:
                     for command in commands:
                         self.__send_command(command)
                     break
+                fp_before = self._state_fingerprint()
                 graph_handled = self.__decide_with_ai_player_graph()
                 if graph_handled:
+                    fp_after = self._state_fingerprint()
+                    if fp_after == fp_before:
+                        self._no_progress_count += 1
+                        if self._no_progress_count >= _NO_PROGRESS_LIMIT:
+                            log_to_run(
+                                f"Loop detected: state unchanged after {self._no_progress_count} "
+                                f"iterations on {self.last_state.screen_type()}, forcing escape"
+                            )
+                            self._no_progress_count = 0
+                            self._force_escape_loop()
+                    else:
+                        self._no_progress_count = 0
                     handled = True
                     continue
                 # for handler in DEFAULT_GAME_HANDLERS:

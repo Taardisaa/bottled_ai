@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from rs.api.transport import ProtocolError
 from rs.calculator.executor import get_best_battle_action
 from rs.calculator.interfaces.comparator_interface import ComparatorInterface
 from rs.llm.agents.base_agent import AgentContext, AgentTool
@@ -183,7 +184,16 @@ class ExecuteBattleCommandTool(AgentTool):
             }
 
         runtime = _runtime_from_context(context)
-        next_state = runtime.execute(validation["commands"])
+        try:
+            next_state = runtime.execute(validation["commands"])
+        except ProtocolError as exc:
+            return {
+                "executed": False,
+                "commands": validation["commands"],
+                "validation": validation,
+                "summary": f"protocol_error: {exc}",
+                "state": runtime.current_state(),
+            }
         return {
             "executed": True,
             "commands": validation["commands"],

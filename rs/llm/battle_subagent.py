@@ -478,8 +478,12 @@ class BattleSubagent:
         executor = self._tools["execute_battle_command"]
         result = executor.run(context, {"commands": commands})
         if not bool(result.get("executed")):
-            working_memory = self._append_step_summary(dict(state["working_memory"]), f"execution failed: {result.get('validation')}")
-            return {"working_memory": working_memory, "action_committed": False}
+            working_memory = self._append_step_summary(dict(state["working_memory"]), f"execution failed: {result.get('summary', result.get('validation'))}")
+            update: dict[str, Any] = {"working_memory": working_memory, "action_committed": False}
+            partial_state = result.get("state")
+            if partial_state is not None:
+                update["current_state"] = partial_state
+            return update
 
         working_memory = dict(state["working_memory"])
         previous_signature = str(state.get("current_state_signature", ""))

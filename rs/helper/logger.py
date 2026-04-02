@@ -10,7 +10,6 @@ from rs.helper.seed import get_seed_string
 from rs.machine.state import GameState
 
 current_run_log_file: str = ''
-current_run_log_count: int = 0
 current_run_calculator_missing_relics: set[str] = set()
 current_run_calculator_missing_potions: set[str] = set()
 current_run_calculator_missing_powers: set[str] = set()
@@ -48,13 +47,11 @@ def _append_log_line(filename: str, message: str) -> None:
 def init_run_logging(seed: str):
     dt = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     global current_run_log_file
-    global current_run_log_count
     global current_run_calculator_missing_relics
     global current_run_calculator_missing_powers
     global current_run_calculator_missing_cards
     global current_run_calculator_missing_potions
     global current_run_missing_events
-    current_run_log_count = 0
     current_run_log_file = "runs/" + dt + "--" + seed
     _log_path(current_run_log_file).touch(exist_ok=False)
     log("Seed: " + seed, "calculator_missing_enums")
@@ -69,11 +66,6 @@ def log_to_run(message: str, console: bool = True):
     if not current_run_log_file:
         return
 
-    global current_run_log_count
-    current_run_log_count += 1
-    if current_run_log_count > 10000:
-        log("Dying due to this seeming to be stuck", current_run_log_file)
-        raise Exception("Dying due to this seeming to be stuck...")
     log(message, current_run_log_file, console=console)
 
 
