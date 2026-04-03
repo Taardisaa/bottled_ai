@@ -1,85 +1,298 @@
-# LangMem: enablement, storage, and reflection
+# LangMem: enablement, storage, retrieval, and reflection
 
-This document describes how LangMem is wired in Bottled AI: configuration, when memories are written, how they are “distilled” into semantic form, where they live on disk, and how they surface in later decisions.
+This document describes how LangMem is wired in Bottled AI today: configuration, where records live, what gets written, how semantic reflection works, and how memories show up in later decisions.
+
+Relevant code:
+- `rs/llm/langmem_service.py`
+- `rs/llm/config.py`
+- `configs/llm_config.yaml`
+- `rs/llm/ai_player_graph.py`
+- `rs/llm/battle_subagent.py`
+- `rs/llm/campfire_subagent.py`
+- `rs/llm/reward_subagent.py`
+- `rs/machine/game.py`
 
 ## Is LangMem enabled?
 
-In repo defaults, yes: `configs/llm_config.yaml` sets `langmem.enabled: true` under the top-level LLM `enabled` block. That value is loaded into `LlmConfig.langmem_enabled` in `rs/llm/config.py`.
+In repo defaults, yes:
+- `configs/llm_config.yaml` sets `langmem.enabled: true`
+- that value loads into `LlmConfig.langmem_enabled` in `rs/llm/config.py`
 
-You can override it with the environment variable `LANGMEM_ENABLED` (`true` / `false` / `1` / `0`, etc., per the same parsing as other LLM flags).
+You can override it with:
+- `LANGMEM_ENABLED`
 
-**Important:** “Enabled in YAML” is not the same as “actually working.” `LangMemService` in `rs/llm/langmem_service.py` only reaches status `ready` after a successful embedding health check (`embed_query("langmem health check")`). If that fails—for example missing `sentence-transformers` / model download, or misconfigured remote embeddings—the service stays in `embeddings_unavailable` and **all** record, reflect, and search calls become no-ops. Check `langmem_status` in logs or graph trace; if it is not `ready`, fix embeddings first.
+Important distinction:
+- “enabled in config” is not the same as “ready at runtime”
+- `LangMemService` only becomes `ready` after embeddings initialize successfully and the service hydrates its in-memory store
+- if initialization fails, status becomes `embeddings_unavailable:<reason>`
 
-## Where knowledge is stored
+When LangMem is not ready:
+- retrieval does not search the store and instead returns:
+  - `retrieved_episodic_memories: "none"`
+  - `retrieved_semantic_memories: "none"`
+  - `langmem_status: <non-ready status>`
+- write paths like `record_accepted_decision`, `record_custom_memory`, and `finalize_run` return early
 
-- **SQLite:** default path `dataset/langmem/memory.sqlite3` (`langmem.sqlite_path` in YAML, or env `LANGMEM_SQLITE_PATH`). Schema and access are in `LangMemRepository` in `rs/llm/langmem_service.py` (table `langmem_records`).
-- **In-process index:** LangGraph’s `InMemoryStore` with embeddings over the `content` field. On startup the service **hydrates** the in-memory store from SQLite.
+With current repo defaults, `langmem.fail_fast_init: true`, so startup failure is expected to raise rather than silently continue.
 
-## Episodic vs semantic (“distillation”)
+## Where memories are stored
+
+LangMem has two storage layers:
+
+- **SQLite**
+  Default path: `dataset/langmem/memory.sqlite3`
+  Implemented by `LangMemRepository`
+  Table: `langmem_records`
+- **In-process vector store**
+  `langgraph.store.memory.InMemoryStore`
+  Indexed over the `content` field
+  Hydrated from SQLite during service initialization
+
+If embeddings fail to initialize, the service never becomes ready and the SQLite repository may not be created at all.
+
+## Memory types
+
+There are two persisted memory types:
+
+- `episodic`
+  Concrete accepted decisions or custom memory lines tied to a specific run
+- `semantic`
+  Distilled memories produced by reflection over episodic text
+
+## Namespaces
+
+### Episodic namespace
+
+Run-local episodic memories are stored under:
+
+```text
+("run", agent_identity, character_class, seed)
+```
+
+This comes from `_run_namespace()` in `rs/llm/langmem_service.py`.
+
+That means episodic memories are:
+- per agent identity
+- per character class
+- per run seed
+
+### Semantic namespace
+
+Reflected semantic memories are stored under:
+
+```text
+("semantic", agent_identity, character_class, handler_name)
+```
+
+This comes from `_semantic_namespace()` in `rs/llm/langmem_service.py`.
+
+That means semantic memories are:
+- per agent identity
+- per character class
+- per handler
+- not per seed
+
+## What writes episodic memory
+
+### Accepted decisions
+
+`LangMemService.record_accepted_decision()` writes one episodic record when:
+- the service is ready
+- `decision.proposed_command` is not `None`
+- `decision.fallback_recommended` is false
+
+This path is used by:
+- the one-shot `AIPlayerGraph`
+- `BattleSubagent`
+- `CampfireSubagent`
+- reward/grid subagents
+- the older `AIPlayerAgent` orchestrator wrapper
+
+The stored episodic text currently looks like:
+
+```text
+A{act} F{floor} {handler_name} chose {command} with confidence {confidence} because {explanation}.
+```
+
+### Custom memory
+
+`LangMemService.record_custom_memory()` writes episodic memory lines that are not ordinary accepted decisions.
+
+Current important use:
+- `BattleSubagent` writes a final battle summary via `record_custom_memory(..., reflect=True)` at session end
+
+Custom memories are also stored in the run namespace as episodic records.
+
+## Reflection: episodic to semantic
 
 ```mermaid
 flowchart LR
-  subgraph write [Writes]
-    D[Accepted graph decision]
-    E[Episodic MemoryRecord]
-    B[Reflection buffer batch]
-    R[LLM via create_memory_store_manager]
-    S[Semantic MemoryRecord]
-  end
-  D --> E
-  E --> B
-  B --> R
-  R --> S
+  A["accepted decision or custom memory"] --> B["episodic record"]
+  B --> C["reflection buffer or direct reflection trigger"]
+  C --> D["LangMem reflection manager"]
+  D --> E["semantic record"]
 ```
 
-### Episodic memories (per run)
+Semantic memories are produced by `_reflect_batch()`.
 
-- Written in `LangMemService.record_accepted_decision()` when the AI player graph commits a valid decision. The `commit_short_term_memory` node in `rs/llm/ai_player_graph.py` builds an `AgentDecision` and calls `record_accepted_decision`.
-- **Skipped** when: the service is not ready; `proposed_command` is `None`; or `fallback_recommended` is true (see guards in `record_accepted_decision`).
-- **Namespace:** `("run", agent_identity, character_class, seed)` — see `_run_namespace()` in `langmem_service.py`. Episodic entries are tied to **that run’s** class and seed, not to all runs globally.
+Reflection uses:
+- `create_memory_store_manager(...)` from LangMem
+- a `ChatOpenAI` model configured from `rs/utils/config.py`
+- the semantic namespace for the current handler
 
-### Semantic memories (reflection / distillation)
+### When reflection runs
 
-- **Mechanism:** batches of episodic text (and optionally a run-end summary) are passed to LangMem’s `create_memory_store_manager` with a `ChatOpenAI` client configured from `rs/utils/config.py` (`fast_llm_model`, `LLM_BASE_URL`, keys—the same stack as the rest of the LLM runtime). See `_reflect_batch` and `_build_reflection_manager` in `langmem_service.py`.
-- **When reflection runs:**
-  - After every `langmem_reflection_batch_size` accepted decisions for the same `run_id` (default **5** in `configs/llm_config.yaml`), **or**
-  - At run end: `Game.__finalize_langmem_run()` in `rs/machine/game.py` calls `finalize_run()`, which flushes the per-run buffer, appends a textual run summary (floor, score, victory, bosses, elites), and submits `_reflect_batch` on a single-worker thread pool.
-- **Namespace:** `("semantic", agent_identity, character_class, handler_name)` — semantic memories are **per handler** (e.g. map vs battle), not per seed.
-- **Cap:** `_prune_semantic_namespace` keeps only the newest `max_semantic_memories_per_namespace` entries (default **50**) per semantic namespace.
+Reflection can run in three ways:
 
-## How memories influence later decisions
+1. **Accepted decision batch reflection**
+   `record_accepted_decision()` appends episodic lines to a run-local buffer
+   once the buffer reaches `langmem_reflection_batch_size`, it submits `_reflect_batch(...)`
 
-`LangMemService.build_context_memory(context)` builds a query string from the current `AgentContext` (handler, screen, act/floor, choices, run summary, etc.) and runs two vector searches: one in the episodic run namespace and one in the semantic namespace for that handler. Each search is limited by `top_k` (default **3**).
+2. **Custom memory reflection**
+   `record_custom_memory(..., reflect=True)` submits `_reflect_batch(...)` immediately for that content
 
-The formatted strings are injected into graph/subagent state and into provider prompts (for example `rs/llm/ai_player_graph.py` and providers such as `rs/llm/providers/map_llm_provider.py`).
+3. **Run finalization reflection**
+   `finalize_run()` flushes the remaining per-run reflection buffer, appends a run-end summary string, and reflects that batch asynchronously
+
+### Current defaults
+
+Current repo defaults from `configs/llm_config.yaml`:
+
+| YAML key | Current default |
+|----------|-----------------|
+| `top_k` | `5` |
+| `reflection_batch_size` | `8` |
+| `max_semantic_memories_per_namespace` | `200` |
+| `fail_fast_init` | `true` |
+
+## Pruning
+
+After semantic writes, `_prune_semantic_namespace()` keeps only the newest:
+
+```text
+langmem_max_semantic_memories_per_namespace
+```
+
+semantic records for that semantic namespace.
+
+With current repo defaults, that cap is `200`.
+
+## What gets retrieved later
+
+`LangMemService.build_context_memory(context)`:
+
+1. builds a query string from the current `AgentContext`
+2. searches the run-local episodic namespace
+3. searches the handler-local semantic namespace
+4. formats the results into two strings
+
+The current query text includes:
+- handler name
+- screen type
+- act and floor
+- choice list
+- run summary
+- relic names
+- deck profile
+
+## Important `top_k` nuance
+
+The vector search uses:
+
+```text
+limit = langmem_top_k
+```
+
+for both episodic and semantic lookups.
+
+But the formatting layer currently only renders the first **3** results from each search into the returned prompt text.
+
+So today:
+- search depth is controlled by `langmem_top_k`
+- prompt-visible memory lines are effectively capped at 3 episodic + 3 semantic entries
+
+## How retrieved memories are surfaced
+
+`build_context_memory()` returns:
+- `retrieved_episodic_memories`
+- `retrieved_semantic_memories`
+- `langmem_status`
+
+Those values are then injected into decision context for:
+- the one-shot `AIPlayerGraph`
+- `BattleSubagent`
+- `CampfireSubagent`
+- reward/grid subagents
+- memory-augmented advisor agents
+
+Providers then read those values from `context.extras` when building prompts.
+
+## Run finalization
+
+At run end, `Game.__finalize_langmem_run()` calls `LangMemService.finalize_run(...)`.
+
+That finalization path:
+- flushes any remaining buffered episodic text for the run
+- appends a run-end summary string
+- submits one reflection batch asynchronously
+
+The current run-finalization summary includes:
+- floor
+- score
+- bosses
+- elites
+- `run_memory_summary`
+
+It does **not** currently include a `victory` field in the generated summary string.
+
+## Caveat: final payload without `game_state`
+
+If the last Communication Mod payload omits `game_state`, `Game.__finalize_langmem_run()` falls back to the most recent captured game-state snapshot.
+
+If neither exists:
+- it logs that LangMem finalization is being skipped
+- no final run reflection batch is submitted
+
+Previously written episodic rows and previously completed reflection batches are unaffected.
 
 ## Configuration reference
 
-All under `langmem` in `configs/llm_config.yaml` (with env overrides as defined in `rs/llm/config.py`):
+All LangMem settings live under `langmem` in `configs/llm_config.yaml`, with environment overrides in `rs/llm/config.py`.
 
-| YAML key | Purpose |
-|----------|---------|
-| `enabled` | Master toggle (`LANGMEM_ENABLED`) |
-| `sqlite_path` | SQLite file (`LANGMEM_SQLITE_PATH`) |
-| `embeddings_base_url` / `embeddings_api_key` / `embeddings_model` | Remote OpenAI-compatible embeddings; if `embeddings_base_url` is empty, local `sentence-transformers` is used |
-| `top_k` | Retrieved items per search (`LANGMEM_TOP_K`) |
-| `reflection_batch_size` | Episodic lines before one reflection LLM call (`LANGMEM_REFLECTION_BATCH_SIZE`) |
-| `max_semantic_memories_per_namespace` | Pruning cap for semantic memories (`LANGMEM_MAX_SEMANTIC_MEMORIES_PER_NAMESPACE`) |
+| YAML key | Purpose | Env override |
+|----------|---------|--------------|
+| `enabled` | Master toggle | `LANGMEM_ENABLED` |
+| `sqlite_path` | SQLite path | `LANGMEM_SQLITE_PATH` |
+| `embeddings_base_url` | Remote embeddings endpoint | `LANGMEM_EMBEDDINGS_BASE_URL` |
+| `embeddings_api_key` | Remote embeddings key | `LANGMEM_EMBEDDINGS_API_KEY` |
+| `embeddings_model` | Embeddings model id | `LANGMEM_EMBEDDINGS_MODEL` |
+| `top_k` | Search limit per namespace | `LANGMEM_TOP_K` |
+| `reflection_batch_size` | Episodic lines before automatic batch reflection | `LANGMEM_REFLECTION_BATCH_SIZE` |
+| `max_semantic_memories_per_namespace` | Semantic pruning cap | `LANGMEM_MAX_SEMANTIC_MEMORIES_PER_NAMESPACE` |
+| `fail_fast_init` | Raise if initialization fails | `LANGMEM_FAIL_FAST_INIT` |
 
 ## How to verify it is working
 
-1. **Status:** In logs or `logs/ai_player_graph.jsonl` (if graph trace is on), look for `langmem_status`. It should be `ready` for any persistence or retrieval to occur.
-2. **Disk:** After a run with a ready service and recorded decisions, `dataset/langmem/memory.sqlite3` should exist and typically grow over time.
-3. **Dependencies:** Local embeddings require a working `sentence-transformers` setup (see `requirements.txt`). Remote embeddings require a reachable endpoint and a model id that passes the startup `/models` check when a base URL is set.
+1. **Status**
+   Look for `langmem_status` in logs, graph trace, or subagent logs.
+   Expected healthy state: `ready`
 
-## Caveat: run finalization without `game_state`
+2. **Disk**
+   After a ready run that actually records decisions or custom memories, `dataset/langmem/memory.sqlite3` should exist and typically grow
 
-If the last Communication Mod JSON payload does not include `game_state`, `Game.__finalize_langmem_run()` may skip calling `finalize_run()` (it logs and returns early). In that case you lose the **final** reflection flush and run summary for that exit. Episodic rows already stored and reflection batches that already completed (e.g. every N decisions) are unaffected.
+3. **Prompt-visible retrieval**
+   In logs you should see `LangMem retrieval | ...`
+   The returned episodic and semantic strings should be something other than `none` after enough relevant history accumulates
 
-## Related code
+4. **Embeddings**
+   Local mode requires a working `sentence-transformers` setup
+   Remote mode requires a reachable OpenAI-compatible endpoint and a model that passes the `/models` availability check
 
-- `rs/llm/langmem_service.py` — service, repository, reflection, search
-- `rs/llm/config.py` — YAML + env loading for LangMem
-- `configs/llm_config.yaml` — defaults
-- `rs/machine/game.py` — `__finalize_langmem_run()`
-- `rs/llm/ai_player_graph.py` — context enrichment, `record_accepted_decision` from the graph
+## Current alignment summary
+
+This document now matches the current implementation in these important ways:
+- accepted-decision writes are not limited to the one-shot graph
+- battle custom summaries are part of LangMem writes
+- current repo defaults are `top_k=5`, `reflection_batch_size=8`, `max_semantic_memories_per_namespace=200`, `fail_fast_init=true`
+- run finalization summary does not currently include `victory`
+- retrieval searches `top_k` items but only formats the first 3 into prompt text

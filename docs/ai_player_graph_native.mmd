@@ -1,0 +1,41 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	ingest_game_state(ingest_game_state)
+	retrieve_long_term_memory(retrieve_long_term_memory)
+	route_decision_type(route_decision_type)
+	decide_event(decide_event)
+	decide_shop(decide_shop)
+	decide_card_reward(decide_card_reward)
+	decide_map(decide_map)
+	decide_generic(decide_generic)
+	decide_fallback(decide_fallback)
+	validate_decision(validate_decision)
+	commit_short_term_memory(commit_short_term_memory)
+	emit_commands(emit_commands)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> ingest_game_state;
+	commit_short_term_memory --> emit_commands;
+	decide_card_reward --> validate_decision;
+	decide_event --> validate_decision;
+	decide_fallback --> validate_decision;
+	decide_generic --> validate_decision;
+	decide_map --> validate_decision;
+	decide_shop --> validate_decision;
+	ingest_game_state --> retrieve_long_term_memory;
+	retrieve_long_term_memory --> route_decision_type;
+	route_decision_type -.-> decide_card_reward;
+	route_decision_type -.-> decide_event;
+	route_decision_type -.-> decide_fallback;
+	route_decision_type -.-> decide_generic;
+	route_decision_type -.-> decide_map;
+	route_decision_type -.-> decide_shop;
+	validate_decision --> commit_short_term_memory;
+	emit_commands --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

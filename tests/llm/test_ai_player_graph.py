@@ -267,6 +267,8 @@ class TestAIPlayerGraph(unittest.TestCase):
         self.assertIsNone(scripted_provider.feedbacks[0])
         self.assertIsInstance(scripted_provider.feedbacks[1], dict)
         self.assertEqual("empty_command", scripted_provider.feedbacks[1].get("code"))
+        self.assertIn("choose <index>", scripted_provider.feedbacks[1].get("message", ""))
+        self.assertEqual("Example valid output: choose 0", scripted_provider.feedbacks[1].get("corrective_hint"))
 
     def test_battle_state_is_routed_to_battle_subagent(self):
         battle_subagent = FakeBattleSubagent()
@@ -711,6 +713,28 @@ class TestAIPlayerGraph(unittest.TestCase):
         self.assertIsNone(scripted_provider.feedbacks[0])
         self.assertIsInstance(scripted_provider.feedbacks[1], dict)
         self.assertEqual("choose_requires_index", scripted_provider.feedbacks[1].get("code"))
+
+    def test_event_handler_retries_with_bare_index_feedback(self):
+        graph = AIPlayerGraph(
+            config=LlmConfig(
+                enabled=True,
+                ai_player_graph_enabled=True,
+                telemetry_enabled=False,
+                graph_trace_enabled=False,
+            ),
+            langmem_service=FakeLangMemService(),
+        )
+        scripted_provider = ScriptedProposalProvider(["0", "choose 0"])
+        graph._event_provider = scripted_provider
+
+        state = load_resource_state("/event/divine_fountain.json")
+        commands = graph.decide(state)
+
+        self.assertEqual(["choose 0", "wait 30"], commands)
+        self.assertEqual(2, scripted_provider.calls)
+        self.assertIsInstance(scripted_provider.feedbacks[1], dict)
+        self.assertEqual("choose_requires_command_prefix", scripted_provider.feedbacks[1].get("code"))
+        self.assertEqual("Example valid output: choose 0", scripted_provider.feedbacks[1].get("corrective_hint"))
 
     def test_graph_trace_logs_successful_decision_path(self):
         with tempfile.TemporaryDirectory() as tmp:

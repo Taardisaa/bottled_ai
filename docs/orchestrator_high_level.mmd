@@ -1,0 +1,26 @@
+flowchart LR
+    G["Game.run()"] --> D["AIPlayerGraph.execute(state, runtime)"]
+
+    D --> F{"shortcut?"}
+    F --> X["execute command batch"]
+    F --> C["_build_context(state)"]
+
+    C --> R{"handler"}
+
+    R --> O["One-shot AIPlayerGraph\ncompiled LangGraph"]
+
+    R --> B["BattleSubagent"]
+    R --> CF["CampfireSubagent"]
+    R --> CR["CombatRewardSubagent"]
+    R --> BR["BossRewardSubagent"]
+    R --> AT["AstrolabeTransformSubagent"]
+    R --> GS["GridSelectSubagent"]
+
+    O --> X
+    B --> X
+    CF --> X
+    CR --> X
+    BR --> X
+    AT --> X
+    GS --> X
+    X --> D

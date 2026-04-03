@@ -72,6 +72,32 @@ class TestEventLlmProvider(unittest.TestCase):
         self.assertEqual("pick reward", proposal.explanation)
         self.assertEqual(123, proposal.metadata["token_total"])
 
+    def test_propose_coerces_bare_index_into_choose_command(self):
+        fake_module = types.SimpleNamespace(
+            ask_llm_once=lambda **kwargs: (
+                {
+                    "proposed_command": "0",
+                    "confidence": 0.95,
+                    "explanation": "pick first event option",
+                },
+                55,
+            )
+        )
+        context = AgentContext(
+            handler_name="EventHandler",
+            screen_type="EVENT",
+            available_commands=["choose", "wait", "state"],
+            choice_list=["gold", "leave"],
+            game_state={"event_name": "Dummy"},
+        )
+
+        with patch.dict("sys.modules", {"rs.utils.llm_utils": fake_module}):
+            provider = EventLlmProvider(model="gpt-5-mini")
+            proposal = provider.propose(context)
+
+        self.assertEqual("choose 0", proposal.proposed_command)
+        self.assertEqual(0.95, proposal.confidence)
+
     def test_build_prompt_renders_event_options_and_prompt_safe_status(self):
         state = load_resource_state("event/event_neow.json")
         context = build_event_agent_context(state, "EventHandler")

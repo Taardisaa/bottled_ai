@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from rs.llm.agents.base_agent import AgentContext
 from rs.utils.config import config
+from rs.utils.type_utils import is_int_string
 
 
 PROMPT_TEMPLATE = (Path(__file__).resolve().parent / "prompts" / "event_decision_prompt.txt").read_text(
@@ -83,6 +84,8 @@ class EventLlmProvider:
             proposed_command = str(proposed_command).strip()
             if proposed_command == "":
                 proposed_command = None
+            else:
+                proposed_command = self._normalize_proposed_command(context, proposed_command)
 
         confidence_raw = response.confidence
         try:
@@ -104,6 +107,15 @@ class EventLlmProvider:
             explanation=explanation,
             metadata=metadata,
         )
+
+    def _normalize_proposed_command(self, context: AgentContext, proposed_command: str) -> str:
+        if (
+                is_int_string(proposed_command)
+                and "choose" in [str(command).strip().lower() for command in context.available_commands]
+                and len(context.choice_list) > 0
+        ):
+            return f"choose {proposed_command}"
+        return proposed_command
 
     def _build_prompt(
             self,

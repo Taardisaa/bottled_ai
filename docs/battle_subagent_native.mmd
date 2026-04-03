@@ -1,0 +1,37 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	session_bootstrap(session_bootstrap)
+	retrieve_battle_experience(retrieve_battle_experience)
+	state_ingest(state_ingest)
+	agent_node(agent_node)
+	tool_node(tool_node)
+	action_validate(action_validate)
+	action_commit(action_commit)
+	exit_check(exit_check)
+	session_finalize(session_finalize)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> session_bootstrap;
+	action_commit --> exit_check;
+	action_validate -.-> action_commit;
+	action_validate -.-> agent_node;
+	action_validate -.-> session_finalize;
+	agent_node -.-> action_validate;
+	agent_node -.-> session_finalize;
+	agent_node -. &nbsp;tools&nbsp; .-> tool_node;
+	exit_check -.-> session_finalize;
+	exit_check -.-> state_ingest;
+	retrieve_battle_experience --> state_ingest;
+	session_bootstrap --> retrieve_battle_experience;
+	state_ingest -.-> action_commit;
+	state_ingest -.-> agent_node;
+	state_ingest -.-> session_finalize;
+	tool_node --> agent_node;
+	session_finalize --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

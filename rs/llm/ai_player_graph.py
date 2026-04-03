@@ -48,6 +48,7 @@ from rs.llm.reward_subagent import (
 )
 from rs.machine.command import Command
 from rs.machine.state import GameState
+from rs.utils.type_utils import is_int_string
 
 
 GraphRoute = Literal[
@@ -1062,24 +1063,61 @@ class AIPlayerGraph:
                 break
             proposed_command = proposal.proposed_command
             if proposed_command is None:
+                validation_feedback = self._build_retry_feedback_for_missing_command(decision_context)
+                continue
+
+            normalized_command = str(proposed_command).strip()
+            if self._should_require_choose_prefix(decision_context, normalized_command):
                 validation_feedback = {
-                    "code": "empty_command",
+                    "code": "choose_requires_command_prefix",
                     "message": (
-                        "proposed_command cannot be null. Return exactly one concrete, legal command "
-                        "for the current state."
+                        "Do not return only an index. Return a full legal command in the form "
+                        "'choose <index>'."
                     ),
                     "allowed_commands": [str(command) for command in decision_context.available_commands],
                     "choice_list": [str(choice) for choice in decision_context.choice_list],
+                    "corrective_hint": "Example valid output: choose 0",
+                    "rejected_command": normalized_command,
                 }
                 continue
 
-            validation, feedback = validate_proposed_command(decision_context, proposed_command)
+            validation, feedback = validate_proposed_command(decision_context, normalized_command)
             if validation.is_valid:
                 proposal_validated = True
                 break
             validation_feedback = feedback
 
         return proposal, proposal_validated, validation_feedback
+
+    def _build_retry_feedback_for_missing_command(self, decision_context: AgentContext) -> Dict[str, Any]:
+        choose_available = "choose" in [str(command).strip().lower() for command in decision_context.available_commands]
+        feedback = {
+            "code": "empty_command",
+            "allowed_commands": [str(command) for command in decision_context.available_commands],
+            "choice_list": [str(choice) for choice in decision_context.choice_list],
+        }
+        if choose_available and len(decision_context.choice_list) > 0:
+            feedback["message"] = (
+                "proposed_command cannot be null. Return exactly one full legal command. "
+                "For event choices, do not return only an index; return 'choose <index>'."
+            )
+            feedback["corrective_hint"] = "Example valid output: choose 0"
+            return feedback
+
+        feedback["message"] = (
+            "proposed_command cannot be null. Return exactly one concrete, legal command "
+            "for the current state."
+        )
+        return feedback
+
+    @staticmethod
+    def _should_require_choose_prefix(decision_context: AgentContext, proposed_command: str) -> bool:
+        if not is_int_string(proposed_command):
+            return False
+        return (
+            "choose" in [str(command).strip().lower() for command in decision_context.available_commands]
+            and len(decision_context.choice_list) > 0
+        )
 
     def _proposal_result_after_retry(
             self,
