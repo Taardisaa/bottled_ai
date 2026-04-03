@@ -4,6 +4,8 @@ import unittest
 from rs.llm.integration.astrolabe_transform_context import build_astrolabe_transform_agent_context
 from rs.llm.integration.boss_reward_context import build_boss_reward_agent_context
 from rs.llm.integration.combat_reward_context import build_combat_reward_agent_context
+from rs.llm.integration.grid_select_context import build_grid_select_agent_context
+from rs.machine.state import GameState
 from test_helpers.resources import load_resource_state
 
 
@@ -60,6 +62,18 @@ class TestRewardContexts(unittest.TestCase):
         self.assertEqual(3, context.extras["num_cards"])
         self.assertEqual(1, len(context.extras["selected_cards"]))
         self.assertEqual(2, context.extras["picks_remaining"])
+
+    def test_grid_select_context_treats_confirm_up_as_zero_remaining_picks(self):
+        state = load_resource_state("/other/upgrade_bash.json")
+        payload = copy.deepcopy(state.json)
+        payload["available_commands"] = ["confirm", "cancel", "wait", "state"]
+        payload["game_state"]["screen_state"]["confirm_up"] = True
+        payload["game_state"]["screen_state"]["selected_cards"] = []
+
+        context = build_grid_select_agent_context(GameState(payload), "GridSelectHandler")
+
+        self.assertTrue(context.extras["confirm_up"])
+        self.assertEqual(0, context.extras["picks_remaining"])
 
 
 if __name__ == "__main__":

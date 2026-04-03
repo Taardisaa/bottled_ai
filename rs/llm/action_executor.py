@@ -40,6 +40,7 @@ class UnifiedActionExecutor:
             boss_reward_runner: RuntimeRunner,
             astrolabe_runner: RuntimeRunner,
             campfire_runner: RuntimeRunner,
+            grid_select_runner: RuntimeRunner,
             context_builder,
             config: ExecutorConfig | None = None,
     ):
@@ -48,6 +49,7 @@ class UnifiedActionExecutor:
         self._boss_reward_runner = boss_reward_runner
         self._astrolabe_runner = astrolabe_runner
         self._campfire_runner = campfire_runner
+        self._grid_select_runner = grid_select_runner
         self._context_builder = context_builder
         self._config = ExecutorConfig() if config is None else config
 
@@ -69,6 +71,8 @@ class UnifiedActionExecutor:
             return self._astrolabe_runner.run(state, runtime)
         if handler_name == "CampfireHandler":
             return self._campfire_runner.run(state, runtime)
+        if handler_name == "GridSelectHandler":
+            return self._grid_select_runner.run(state, runtime)
 
         # Non-subagent handlers (event/map/shop/card reward/generic) should
         # still go through graph LLM decision flow, then execute returned commands.

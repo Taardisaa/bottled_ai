@@ -10,18 +10,12 @@ from langgraph.graph import END, START, StateGraph
 
 from rs.game.path import PathHandlerConfig
 from rs.game.screen_type import ScreenType
+from rs.helper.logger import log_to_run
 from rs.llm.action_executor import ActionExecutionResult, UnifiedActionExecutor
 from rs.llm.action_policy_registry import ActionPolicyRegistry
 from rs.llm.battle_runtime import BattleRuntimeAdapter, BattleSessionResult
 from rs.llm.battle_subagent import BattleSubagent
 from rs.llm.campfire_subagent import CampfireSessionResult, CampfireSubagent
-from rs.llm.battle_tools import (
-    AnalyzeWithCalculatorTool,
-    EnumerateLegalActionsTool,
-    ExecuteBattleCommandTool,
-    RetrieveBattleExperienceTool,
-    ValidateBattleCommandTool,
-)
 from rs.llm.agents.base_agent import AgentContext, AgentDecision
 from rs.llm.config import LlmConfig, load_llm_config
 from rs.llm.graph_trace import build_graph_trace_record, mirror_graph_trace_to_run_log, write_graph_trace
@@ -31,6 +25,7 @@ from rs.llm.integration.campfire_context import build_campfire_agent_context
 from rs.llm.integration.boss_reward_context import build_boss_reward_agent_context, is_astrolabe_transform_state
 from rs.llm.integration.combat_reward_context import build_combat_reward_agent_context
 from rs.llm.integration.generic_context import build_generic_unhandled_agent_context
+from rs.llm.integration.grid_select_context import build_grid_select_agent_context
 from rs.llm.langmem_service import LangMemService, get_langmem_service
 from rs.llm.providers.card_reward_llm_provider import CardRewardLlmProvider
 from rs.llm.providers.event_llm_provider import EventLlmProvider
@@ -48,6 +43,7 @@ from rs.llm.reward_subagent import (
     AstrolabeTransformSubagent,
     BossRewardSubagent,
     CombatRewardSubagent,
+    GridSelectSubagent,
     RewardSessionResult,
 )
 from rs.machine.command import Command
@@ -112,6 +108,7 @@ class AIPlayerGraph:
             combat_reward_subagent: CombatRewardSubagent | None = None,
             boss_reward_subagent: BossRewardSubagent | None = None,
             astrolabe_transform_subagent: AstrolabeTransformSubagent | None = None,
+            grid_select_subagent: GridSelectSubagent | None = None,
     ):
         self._config = load_llm_config() if config is None else config
         self._langmem_service = get_langmem_service(self._config) if langmem_service is None else langmem_service
@@ -140,6 +137,10 @@ class AIPlayerGraph:
             AstrolabeTransformSubagent(langmem_service=self._langmem_service)
             if astrolabe_transform_subagent is None else astrolabe_transform_subagent
         )
+        self._grid_select_subagent = (
+            GridSelectSubagent(langmem_service=self._langmem_service)
+            if grid_select_subagent is None else grid_select_subagent
+        )
         self._action_policy = ActionPolicyRegistry()
         self._last_card_reward_skip: dict[str, Any] | None = None
         self._last_card_reward_skip_consumed: bool = False
@@ -149,14 +150,10 @@ class AIPlayerGraph:
             combat_reward_runner=self,
             boss_reward_runner=self,
             astrolabe_runner=self,
+            grid_select_runner=self,
             context_builder=self._build_context,
         )
-        if battle_subagent is None:
-            self._battle_subagent.register_tool(EnumerateLegalActionsTool())
-            self._battle_subagent.register_tool(AnalyzeWithCalculatorTool())
-            self._battle_subagent.register_tool(ValidateBattleCommandTool())
-            self._battle_subagent.register_tool(ExecuteBattleCommandTool())
-            self._battle_subagent.register_tool(RetrieveBattleExperienceTool(self._langmem_service))
+
 
     def is_enabled(self) -> bool:
         return self._config.enabled and self._config.ai_player_graph_enabled
@@ -195,6 +192,7 @@ class AIPlayerGraph:
             "CombatRewardHandler",
             "BossRewardHandler",
             "AstrolabeTransformHandler",
+            "GridSelectHandler",
         }:
             self._trace_context_event(
                 context,
@@ -606,6 +604,10 @@ class AIPlayerGraph:
 
         if state.screen_type() == ScreenType.CARD_REWARD.value:
             return None
+        if state.screen_type() == ScreenType.SHOP_SCREEN.value:
+            if not state.has_command(Command.CHOOSE):
+                return [Command.LEAVE.value, Command.PROCEED.value]
+            return None
         if self._is_runtime_subagent_scope(state):
             return None
 
@@ -687,7 +689,7 @@ class AIPlayerGraph:
             return build_generic_unhandled_agent_context(state, "HandSelectHandler")
 
         if state.screen_type() == ScreenType.GRID.value and not is_astrolabe_transform_state(state):
-            return build_generic_unhandled_agent_context(state, "GridSelectHandler")
+            return build_grid_select_agent_context(state, "GridSelectHandler")
 
         if state.screen_type() == ScreenType.CHEST.value:
             return build_generic_unhandled_agent_context(state, "ChestHandler")
@@ -906,13 +908,22 @@ class AIPlayerGraph:
         self._trace_state_event(state, event_type="node_enter", node_name="decide_shop", summary="requesting shop proposal")
         decision_context = self._build_decision_context_from_state(state)
         proposal, proposal_validated, validation_feedback = self._propose_with_validation_retry(decision_context, self._shop_provider)
-        result = self._proposal_result_after_retry(
-            decision_context,
-            proposal,
-            proposal_validated,
-            validation_feedback,
-            failure_code="shop_validation_failed_after_retries",
-        )
+        if not proposal_validated:
+            result = self._proposal_update(
+                decision_context,
+                "return",
+                0.1,
+                "shop_validation_fallback_leave",
+                {"validation_error": "shop_validation_failed_after_retries", "fallback": "return"},
+            )
+        else:
+            result = self._proposal_result_after_retry(
+                decision_context,
+                proposal,
+                proposal_validated,
+                validation_feedback,
+                failure_code="shop_validation_failed_after_retries",
+            )
         self._trace_context_event(
             decision_context,
             event_type="node_exit",
@@ -1497,8 +1508,29 @@ class AIPlayerGraph:
                 summary=reward_session.summary,
             )
 
+        if context.handler_name == "GridSelectHandler":
+            reward_session = self._grid_select_subagent.run(state, runtime)
+            return ActionExecutionResult(
+                handled=reward_session.handled,
+                final_state=reward_session.final_state,
+                reward_session=reward_session,
+                steps=reward_session.steps,
+                summary=reward_session.summary,
+            )
+
         commands = self.decide(runtime.current_state())
         if commands is None:
+            fallback = self._deterministic_safe_fallback(runtime.current_state())
+            if fallback is not None:
+                log_to_run(f"Graph decide failed, using safe fallback: {fallback}")
+                final_state = runtime.execute(fallback)
+                return ActionExecutionResult(
+                    handled=True,
+                    final_state=final_state,
+                    commands=None,
+                    steps=1,
+                    summary="graph_decide_failed_deterministic_fallback",
+                )
             return ActionExecutionResult(handled=False, final_state=runtime.current_state())
         final_state = runtime.execute(commands)
         return ActionExecutionResult(
@@ -1508,6 +1540,14 @@ class AIPlayerGraph:
             steps=1,
             summary="graph_decide_then_execute",
         )
+
+    def _deterministic_safe_fallback(self, state: GameState) -> list[str] | None:
+        for cmd in (Command.PROCEED, Command.LEAVE, Command.CONFIRM, Command.SKIP, Command.CANCEL):
+            if state.has_command(cmd):
+                return [cmd.value]
+        if state.has_command(Command.CHOOSE) and len(state.get_choice_list()) == 1:
+            return ["choose 0"]
+        return None
 
     def _coerce_int(self, value: Any) -> int | None:
         try:

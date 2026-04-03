@@ -20,6 +20,9 @@ BOSS_REWARD_PROMPT = (Path(__file__).resolve().parent / "prompts" / "boss_reward
 ASTROLABE_TRANSFORM_PROMPT = (
     Path(__file__).resolve().parent / "prompts" / "astrolabe_transform_decision_prompt.txt"
 ).read_text(encoding="utf-8")
+GRID_SELECT_PROMPT = (
+    Path(__file__).resolve().parent / "prompts" / "grid_select_decision_prompt.txt"
+).read_text(encoding="utf-8")
 
 
 @dataclass
@@ -345,5 +348,39 @@ class AstrolabeTransformLlmProvider(BaseRewardLlmProvider):
             "selected_cards": context.extras.get("selected_cards", []),
             "picks_remaining": context.extras.get("picks_remaining", 0),
             "deck_profile": context.extras.get("deck_profile", {}),
+        })
+        return payload
+
+
+class GridSelectLlmProvider(BaseRewardLlmProvider):
+    def __init__(self, model: str | None = None, temperature: float = 0.35):
+        super().__init__(
+            model=model,
+            temperature=temperature,
+            prompt_template=GRID_SELECT_PROMPT,
+            cache_namespace="grid_select_subagent",
+            provider_name="grid_select_subagent",
+        )
+
+    def _build_payload(
+            self,
+            context: AgentContext,
+            working_memory: dict[str, Any],
+            validation_feedback: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = self._base_payload(context, working_memory, validation_feedback)
+        payload.update({
+            "grid_mode": context.extras.get("grid_mode", "unknown"),
+            "for_purge": context.extras.get("for_purge", False),
+            "for_transform": context.extras.get("for_transform", False),
+            "for_upgrade": context.extras.get("for_upgrade", False),
+            "confirm_up": context.extras.get("confirm_up", False),
+            "selectable_cards": context.extras.get("selectable_cards", []),
+            "selected_cards": context.extras.get("selected_cards", []),
+            "num_cards": context.extras.get("num_cards", 0),
+            "picks_remaining": context.extras.get("picks_remaining", 0),
+            "deck_profile": context.extras.get("deck_profile", {}),
+            "deck_card_entries": context.extras.get("deck_card_entries", []),
+            "relic_names": context.extras.get("relic_names", []),
         })
         return payload

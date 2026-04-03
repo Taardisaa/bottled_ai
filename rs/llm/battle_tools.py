@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
-from rs.api.transport import ProtocolError
+from langchain_core.tools import tool
+from langgraph.prebuilt import InjectedState
+
 from rs.calculator.executor import get_best_battle_action
 from rs.calculator.interfaces.comparator_interface import ComparatorInterface
-from rs.llm.agents.base_agent import AgentContext, AgentTool
-from rs.llm.langmem_service import LangMemService, get_langmem_service
+from rs.llm.agents.base_agent import AgentContext
+from rs.llm.langmem_service import LangMemService
 from rs.llm.validator import validate_command_batch
 from rs.machine.state import GameState
 
@@ -16,13 +18,6 @@ def _state_from_context(context: AgentContext) -> GameState:
     if not isinstance(state, GameState):
         raise ValueError("battle context missing GameState reference")
     return state
-
-
-def _runtime_from_context(context: AgentContext) -> Any:
-    runtime = context.extras.get("battle_runtime")
-    if runtime is None:
-        raise ValueError("battle context missing runtime adapter")
-    return runtime
 
 
 def _alive_target_indexes(state: GameState) -> list[int]:
@@ -40,10 +35,6 @@ def _selection_card_count(context: AgentContext) -> int:
         return 0
 
 
-def validate_battle_commands(context: AgentContext, commands: list[str]) -> dict[str, Any]:
-    return validate_command_batch(context, commands, mode="battle")
-
-
 class LowestEnemyHpComparator(ComparatorInterface):
     def does_challenger_defeat_the_best(self, best, challenger, original) -> bool:
         def _score(candidate: Any) -> tuple[int, int, int, int]:
@@ -56,18 +47,16 @@ class LowestEnemyHpComparator(ComparatorInterface):
         return _score(challenger) < _score(best)
 
 
-class EnumerateLegalActionsTool(AgentTool):
-    name = "enumerate_legal_actions"
+# ---------------------------------------------------------------------------
+# Implementation classes — called directly by the guardrail fallback.
+# Not part of the public LangGraph tool API; use the @tool functions below.
+# ---------------------------------------------------------------------------
 
+class EnumerateLegalActionsTool:
     def run(self, context: AgentContext, payload: dict[str, Any]) -> dict[str, Any]:
         state = _state_from_context(context)
         commands: list[str] = []
-        categories = {
-            "play": [],
-            "choose": [],
-            "potion": [],
-            "other": [],
-        }
+        categories: dict[str, list[str]] = {"play": [], "choose": [], "potion": [], "other": []}
 
         if "play" in context.available_commands:
             for hand_index, card in enumerate(state.hand.cards, start=1):
@@ -126,23 +115,17 @@ class EnumerateLegalActionsTool(AgentTool):
         }
 
 
-class AnalyzeWithCalculatorTool(AgentTool):
-    name = "analyze_with_calculator"
-
+class AnalyzeWithCalculatorTool:
     def run(self, context: AgentContext, payload: dict[str, Any]) -> dict[str, Any]:
-        state = _state_from_context(context)
         max_path_count = int(payload.get("max_path_count", 250))
         if max_path_count < 1:
             max_path_count = 1
         try:
-            action = get_best_battle_action(state, LowestEnemyHpComparator(), max_path_count=max_path_count)
+            action = get_best_battle_action(
+                _state_from_context(context), LowestEnemyHpComparator(), max_path_count=max_path_count
+            )
         except Exception as exc:
-            return {
-                "recommended_commands": [],
-                "summary": "calculator_failed",
-                "error": str(exc),
-            }
-
+            return {"recommended_commands": [], "summary": "calculator_failed", "error": str(exc)}
         commands = list(action.commands) if action is not None else []
         return {
             "recommended_commands": commands,
@@ -150,66 +133,76 @@ class AnalyzeWithCalculatorTool(AgentTool):
         }
 
 
-class ValidateBattleCommandTool(AgentTool):
-    name = "validate_battle_command"
-
+class ValidateBattleCommandTool:
     def run(self, context: AgentContext, payload: dict[str, Any]) -> dict[str, Any]:
         if "commands" in payload and isinstance(payload["commands"], list):
-            commands = [str(command) for command in payload["commands"]]
+            commands = [str(c) for c in payload["commands"]]
         elif "command" in payload:
             commands = [str(payload["command"])]
         else:
             commands = []
-        return validate_battle_commands(context, commands)
+        return validate_command_batch(context, commands, mode="battle")
 
 
-class ExecuteBattleCommandTool(AgentTool):
-    name = "execute_battle_command"
+# ---------------------------------------------------------------------------
+# LangGraph @tool functions — bound to ChatModel via bind_tools() and
+# dispatched by ToolNode. The `state` argument is injected automatically by
+# ToolNode; the LLM never provides it.
+# ---------------------------------------------------------------------------
 
-    def run(self, context: AgentContext, payload: dict[str, Any]) -> dict[str, Any]:
-        if "commands" in payload and isinstance(payload["commands"], list):
-            commands = [str(command) for command in payload["commands"]]
-        elif "command" in payload:
-            commands = [str(payload["command"])]
-        else:
-            commands = []
+@tool
+def enumerate_legal_actions(state: Annotated[dict, InjectedState] = None) -> dict:
+    """List currently legal battle commands for the exact current state.
+    Returns commands grouped by category (play, choose, potion, other)."""
+    context = (state or {}).get("current_context")
+    if context is None:
+        return {"commands": [], "categories": {}, "summary": "no_context"}
+    return EnumerateLegalActionsTool().run(context, {})
 
-        validation = validate_battle_commands(context, commands)
-        if not bool(validation.get("is_valid")):
+
+@tool
+def analyze_with_calculator(max_path_count: int = 250, state: Annotated[dict, InjectedState] = None) -> dict:
+    """Ask the rs.calculator engine for a recommended command batch.
+    Returns recommended_commands list. Use max_path_count to limit search depth."""
+    context = (state or {}).get("current_context")
+    if context is None:
+        return {"recommended_commands": [], "summary": "no_context"}
+    return AnalyzeWithCalculatorTool().run(context, {"max_path_count": max_path_count})
+
+
+@tool
+def validate_battle_command(commands: list[str], state: Annotated[dict, InjectedState] = None) -> dict:
+    """Validate a command batch against the current battle state before submitting.
+    Returns is_valid and error details."""
+    context = (state or {}).get("current_context")
+    if context is None:
+        return {"is_valid": False, "errors": ["no_context"]}
+    return ValidateBattleCommandTool().run(context, {"commands": commands})
+
+
+@tool
+def submit_battle_commands(commands: list[str]) -> str:
+    """Submit the final command batch to execute in battle.
+    Call this once you are confident in your decision. Do not call other tools after this."""
+    return "submitted"
+
+
+def make_retrieve_battle_experience_tool(langmem_service: LangMemService):
+    """Factory that creates a retrieve_battle_experience tool closed over the given LangMemService."""
+
+    @tool
+    def retrieve_battle_experience(state: Annotated[dict, InjectedState] = None) -> dict:
+        """Retrieve relevant LangMem episodic and semantic battle memories.
+        Call this if you need more context about past battles."""
+        context = (state or {}).get("current_context")
+        if context is None:
             return {
-                "executed": False,
-                "commands": commands,
-                "validation": validation,
-                "summary": "execute_rejected_by_validation",
+                "retrieved_episodic_memories": "none",
+                "retrieved_semantic_memories": "none",
+                "summary": "no_context",
             }
-
-        runtime = _runtime_from_context(context)
-        try:
-            next_state = runtime.execute(validation["commands"])
-        except ProtocolError as exc:
-            return {
-                "executed": False,
-                "commands": validation["commands"],
-                "validation": validation,
-                "summary": f"protocol_error: {exc}",
-                "state": runtime.current_state(),
-            }
-        return {
-            "executed": True,
-            "commands": validation["commands"],
-            "state": next_state,
-            "validation": validation,
-            "summary": f"executed {len(validation['commands'])} commands",
-        }
-
-
-class RetrieveBattleExperienceTool(AgentTool):
-    name = "retrieve_battle_experience"
-
-    def __init__(self, langmem_service: LangMemService | None = None):
-        self._langmem_service = get_langmem_service() if langmem_service is None else langmem_service
-
-    def run(self, context: AgentContext, payload: dict[str, Any]) -> dict[str, Any]:
-        result = self._langmem_service.build_context_memory(context)
+        result = langmem_service.build_context_memory(context)
         result["summary"] = "retrieved battle experience"
         return result
+
+    return retrieve_battle_experience

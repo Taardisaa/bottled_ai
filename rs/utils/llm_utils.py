@@ -724,6 +724,16 @@ def _coerce_structured_response(content: Any, struct: LLMAcceptStructParam) -> O
         if not isinstance(parsed_payload, dict):
             return None
 
+        # Reject dicts whose keys have zero overlap with the schema properties.
+        # Without this check, a dict with completely unrelated keys (e.g. the
+        # LLM using "tool_call" instead of "tool_name") silently passes
+        # validation when all schema fields have defaults, producing an
+        # all-defaults object that discards the LLM's actual intent.
+        if parsed_payload:
+            schema_props = struct.model_json_schema().get("properties", {})
+            if schema_props and not (set(parsed_payload.keys()) & set(schema_props.keys())):
+                return None
+
         try:
             return struct.model_validate(parsed_payload)
         except Exception:

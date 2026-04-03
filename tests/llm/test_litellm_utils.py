@@ -3,9 +3,10 @@ from unittest.mock import patch
 import os
 import io
 
-from pydantic import BaseModel
+from typing import Any
 
-from rs.llm.providers.battle_llm_provider import BattleDirectiveSchema
+from pydantic import BaseModel, Field, field_validator
+
 from rs.utils import llm_utils
 
 
@@ -13,6 +14,28 @@ class DecisionSchema(BaseModel):
     proposed_command: str | None = None
     confidence: float = 0.0
     explanation: str = ""
+
+
+class _TestBattleDirectiveSchema(BaseModel):
+    """Local stand-in for the removed BattleDirectiveSchema, used only in test_litellm_utils."""
+    mode: str = "action"
+    explanation: str = ""
+    confidence: float = 0.0
+    tool_name: str | None = None
+    tool_payload: dict[str, Any] = Field(default_factory=dict)
+    commands: list[str] = Field(default_factory=list)
+
+    @field_validator("tool_payload", mode="before")
+    @classmethod
+    def _normalize_tool_payload(cls, value: Any) -> dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return value
+        return {}
+
+
+BattleDirectiveSchema = _TestBattleDirectiveSchema
 
 
 class IntSchema(BaseModel):

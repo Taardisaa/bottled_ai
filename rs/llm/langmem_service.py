@@ -5,16 +5,21 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import wraps
 import json
 from pathlib import Path
+import re
 import sqlite3
 from threading import RLock
 from typing import Any, Callable
 import uuid
 from urllib import error, request
 
-from langchain_core.messages import HumanMessage
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.embeddings import Embeddings
+from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.runnables import RunnableLambda
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langgraph.store.base import SearchItem
 from langgraph.store.memory import InMemoryStore
@@ -27,6 +32,106 @@ from rs.utils.config import config as llm_runtime_config
 
 
 MemoryManagerFactory = Callable[[tuple[str, ...], InMemoryStore], Any]
+_TOOL_CALL_BLOCK_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+_COMPAT_PATCH_MARKER = "_compatibility_tool_call_bind_tools_patched"
+
+
+def _wrap_bound_tool_runnable(bound: Any) -> Any:
+    def _invoke(input_value: Any, config: Any = None) -> Any:
+        try:
+            response = bound.invoke(input_value, config=config)
+        except TypeError as exc:
+            if "config" not in str(exc):
+                raise
+            response = bound.invoke(input_value)
+        if isinstance(response, AIMessage):
+            return _repair_ai_message_tool_calls(response)
+        return response
+
+    async def _ainvoke(input_value: Any, config: Any = None) -> Any:
+        try:
+            response = await bound.ainvoke(input_value, config=config)
+        except TypeError as exc:
+            if "config" not in str(exc):
+                raise
+            response = await bound.ainvoke(input_value)
+        if isinstance(response, AIMessage):
+            return _repair_ai_message_tool_calls(response)
+        return response
+
+    return RunnableLambda(_invoke, afunc=_ainvoke)
+
+
+def _patch_bind_tools_method(owner: Any) -> None:
+    bind_tools = getattr(owner, "bind_tools", None)
+    if bind_tools is None or getattr(bind_tools, _COMPAT_PATCH_MARKER, False):
+        return
+
+    @wraps(bind_tools)
+    def _patched_bind_tools(self: Any, *args: Any, **kwargs: Any) -> Any:
+        bound = bind_tools(self, *args, **kwargs)
+        return _wrap_bound_tool_runnable(bound)
+
+    setattr(_patched_bind_tools, _COMPAT_PATCH_MARKER, True)
+    setattr(owner, "bind_tools", _patched_bind_tools)
+
+
+def install_compatibility_tool_call_patch() -> None:
+    """Monkey patch common chat-model bind_tools paths to repair markup tool calls."""
+    _patch_bind_tools_method(BaseChatModel)
+    try:
+        from langchain_openai.chat_models.base import BaseChatOpenAI
+    except Exception:
+        return
+    _patch_bind_tools_method(BaseChatOpenAI)
+
+
+install_compatibility_tool_call_patch()
+
+
+class CompatibilityToolCallChatModel(BaseChatModel):
+    """Wrap a chat model and repair tool calls emitted as plain-text markup."""
+
+    model: BaseChatModel
+
+    @property
+    def _llm_type(self) -> str:
+        return f"compatibility_tool_call::{getattr(self.model, '_llm_type', 'unknown')}"
+
+    @property
+    def _identifying_params(self) -> dict[str, Any]:
+        identifying = getattr(self.model, "_identifying_params", {})
+        if isinstance(identifying, dict):
+            return dict(identifying)
+        return {"wrapped_model": str(identifying)}
+
+    def _generate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            **kwargs: Any,
+    ) -> ChatResult:
+        response = self.model.invoke(messages, stop=stop, **kwargs)
+        if not isinstance(response, AIMessage):
+            raise TypeError(f"Expected AIMessage from wrapped model, got {type(response).__name__}")
+        repaired = _repair_ai_message_tool_calls(response)
+        return ChatResult(generations=[ChatGeneration(message=repaired)])
+
+    async def _agenerate(
+            self,
+            messages: list[BaseMessage],
+            stop: list[str] | None = None,
+            **kwargs: Any,
+    ) -> ChatResult:
+        response = await self.model.ainvoke(messages, stop=stop, **kwargs)
+        if not isinstance(response, AIMessage):
+            raise TypeError(f"Expected AIMessage from wrapped model, got {type(response).__name__}")
+        repaired = _repair_ai_message_tool_calls(response)
+        return ChatResult(generations=[ChatGeneration(message=repaired)])
+
+    def bind_tools(self, tools: Any, *, tool_choice: str | None = None, **kwargs: Any) -> Any:
+        bound = self.model.bind_tools(tools, tool_choice=tool_choice, **kwargs)
+        return _wrap_bound_tool_runnable(bound)
 
 
 class LocalSentenceTransformerEmbeddings(Embeddings):
@@ -295,7 +400,12 @@ class LangMemService:
             return
 
         for record in self._repository.load_all():
-            self._store.put(record.namespace, record.memory_id, record.to_store_value(), index=["content"])
+            self._store.put(
+                record.namespace,
+                record.memory_id,
+                _build_store_value(record),
+                index=["content"],
+            )
 
     def is_ready(self) -> bool:
         return self._status == "ready" and self._store is not None
@@ -442,9 +552,16 @@ class LangMemService:
 
         manager = self._build_reflection_manager(context)
         messages = [HumanMessage(content="\n".join(batch))]
-        try:
-            final_puts = manager.invoke({"messages": messages})
-        except Exception:
+        final_puts: list[dict[str, Any]] = []
+        for _ in range(3):
+            try:
+                final_puts = manager.invoke({"messages": messages})
+            except Exception:
+                final_puts = []
+                continue
+            if final_puts:
+                break
+        if not final_puts:
             return
 
         source_run_id = self._resolve_run_id(context)
@@ -466,7 +583,7 @@ class LangMemService:
                 tags=("semantic", trigger, context.handler_name),
                 kind=str(value.get("kind", "Memory")),
             )
-            semantic_value = record.to_store_value()
+            semantic_value = _build_store_value(record, raw_content=value.get("content"))
             semantic_value["trigger"] = trigger
             with self._lock:
                 if self._repository is not None:
@@ -487,12 +604,13 @@ class LangMemService:
             api_key=chat_api_key,
             temperature=0.6,
         )
+        compatible_chat_model = CompatibilityToolCallChatModel(model=chat_model)
         return create_memory_store_manager(
-            chat_model,
+            compatible_chat_model,
             store=self._store,
             namespace=self._semantic_namespace(context),
             enable_deletes=False,
-            query_model=chat_model,
+            query_model=compatible_chat_model,
             query_limit=self._config.langmem_top_k,
         )
 
@@ -592,6 +710,86 @@ def shutdown_langmem_service(wait: bool = True) -> None:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _build_store_value(record: MemoryRecord, raw_content: Any | None = None) -> dict[str, Any]:
+    stored_content = raw_content
+    if stored_content is None:
+        if record.memory_type == "semantic" and record.kind == "Memory":
+            stored_content = {"content": record.content}
+        else:
+            stored_content = record.content
+    return {
+        "kind": record.kind,
+        "content": stored_content,
+        "memory_type": record.memory_type,
+        "source_run_id": record.source_run_id,
+        "handler_name": record.handler_name,
+        "created_at_utc": record.created_at_utc,
+        "updated_at_utc": record.updated_at_utc,
+        "tags": list(record.tags),
+    }
+
+
+def _repair_ai_message_tool_calls(message: AIMessage) -> AIMessage:
+    if message.tool_calls:
+        return message
+
+    parsed_tool_calls = _parse_tool_calls_from_content(message.content)
+    if not parsed_tool_calls:
+        return message
+
+    return AIMessage(
+        content=message.content,
+        additional_kwargs=dict(message.additional_kwargs),
+        response_metadata=dict(message.response_metadata),
+        name=message.name,
+        id=message.id,
+        tool_calls=parsed_tool_calls,
+        invalid_tool_calls=list(message.invalid_tool_calls),
+        usage_metadata=message.usage_metadata,
+    )
+
+
+def repair_ai_message_tool_calls(message: AIMessage) -> AIMessage:
+    """Public compatibility hook for providers that emit tool calls as text markup."""
+    return _repair_ai_message_tool_calls(message)
+
+
+def _parse_tool_calls_from_content(content: Any) -> list[dict[str, Any]]:
+    if not isinstance(content, str) or not content.strip():
+        return []
+
+    tool_calls: list[dict[str, Any]] = []
+    for match in _TOOL_CALL_BLOCK_RE.finditer(content):
+        payload_text = match.group(1).strip()
+        try:
+            payload = json.loads(payload_text)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        name = str(payload.get("name", "")).strip()
+        if not name:
+            continue
+
+        args = payload.get("arguments", payload.get("args", {}))
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                args = {"input": args}
+        if not isinstance(args, dict):
+            args = {"input": args}
+
+        tool_calls.append({
+            "name": name,
+            "args": args,
+            "id": str(payload.get("id") or f"compat_tool_{uuid.uuid4().hex[:12]}"),
+            "type": "tool_call",
+        })
+    return tool_calls
 
 
 def _coerce_memory_content(value: dict[str, Any]) -> str:

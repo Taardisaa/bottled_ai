@@ -13,14 +13,17 @@ from rs.llm.battle_runtime import BattleRuntimeAdapter
 from rs.llm.integration.astrolabe_transform_context import build_astrolabe_transform_agent_context
 from rs.llm.integration.boss_reward_context import build_boss_reward_agent_context, is_astrolabe_transform_state
 from rs.llm.integration.combat_reward_context import build_combat_reward_agent_context
+from rs.llm.integration.grid_select_context import build_grid_select_agent_context
 from rs.llm.langmem_service import LangMemService, get_langmem_service
 from rs.llm.providers.reward_llm_provider import (
     AstrolabeTransformLlmProvider,
     BossRewardLlmProvider,
     CombatRewardLlmProvider,
+    GridSelectLlmProvider,
     RewardCommandProposal,
 )
 from rs.llm.subagent_validation_middleware import validate_proposed_command
+from rs.machine.command import Command
 from rs.machine.state import GameState
 
 
@@ -286,6 +289,8 @@ class RewardSubagentBase:
                     "valid_example": "choose 0" if context.choice_list else "none",
                 }
             else:
+                feedback = self._build_reward_specific_feedback(context, proposed_command)
+            if feedback is None:
                 validation, feedback = validate_proposed_command(context, proposed_command)
                 if validation.is_valid:
                     commands = self._commands_for_context(context, proposed_command)
@@ -311,7 +316,8 @@ class RewardSubagentBase:
                 f"validation failed for {proposed_command}: {feedback_payload.get('code', 'unknown')}",
             )
             if attempt + 1 >= self._config.max_validation_attempts:
-                return {"pending_commands": [], "working_memory": working_memory}
+                fallback = self._validation_exhausted_fallback(context, working_memory)
+                return {"pending_commands": fallback, "working_memory": working_memory}
 
             proposal = self._provider.propose(
                 context,
@@ -326,7 +332,11 @@ class RewardSubagentBase:
             if proposal.proposed_command is None:
                 break
 
-        return {"pending_commands": [], "working_memory": working_memory}
+        fallback = self._validation_exhausted_fallback(context, working_memory)
+        return {"pending_commands": fallback, "working_memory": working_memory}
+
+    def _build_reward_specific_feedback(self, context: AgentContext, proposed_command: str) -> dict[str, Any] | None:
+        return None
 
     def _action_commit_node(self, state: RewardSubagentState) -> dict[str, Any]:
         commands = [str(command).strip() for command in state.get("pending_commands", []) if str(command).strip()]
@@ -445,6 +455,11 @@ class RewardSubagentBase:
         if context.handler_name == "AstrolabeTransformHandler":
             return [proposed_command]
 
+        if context.handler_name == "GridSelectHandler":
+            if proposed_command in ("confirm", "proceed"):
+                return [proposed_command]
+            return [proposed_command, "wait 30"]
+
         return None
 
     def _uses_duplicate_choice_token(self, context: AgentContext, proposed_command: str) -> bool:
@@ -495,6 +510,9 @@ class RewardSubagentBase:
             metadata={"reason": "deterministic_card_handoff"},
         )
 
+    def _validation_exhausted_fallback(self, context: AgentContext, working_memory: dict[str, Any]) -> list[str]:
+        return []
+
     @staticmethod
     def _append_step_summary(working_memory: dict[str, Any], summary: str) -> dict[str, Any]:
         working_memory.setdefault("recent_step_summaries", []).append(summary)
@@ -530,6 +548,105 @@ class CombatRewardSubagent(RewardSubagentBase):
         if not self.is_in_scope(state):
             return None
         return build_combat_reward_agent_context(state, "CombatRewardHandler")
+
+    def _build_reward_specific_feedback(self, context: AgentContext, proposed_command: str) -> dict[str, Any] | None:
+        selected_reward = self._selected_reward_summary(context, proposed_command)
+        if selected_reward is None:
+            return None
+        if str(selected_reward.get("reward_type", "")).strip().upper() != "POTION":
+            return None
+        if not bool(context.extras.get("potions_full", False)):
+            return None
+
+        allowed_commands = self._full_potion_resolution_commands(context)
+        valid_example = allowed_commands[0] if allowed_commands else Command.PROCEED.value
+        potion_name = str(selected_reward.get("potion_name", "")).strip() or "reward potion"
+        reward_index = selected_reward.get("choice_index", "?")
+        return {
+            "rejected_command": proposed_command,
+            "code": "potion_capacity_resolution_required",
+            "message": "cannot take potion reward while potion slots are full",
+            "corrective_hint": (
+                f"reward_summaries[{reward_index}] is a potion reward ({potion_name}) but potions_full=true. "
+                "Return exactly one immediate capacity-resolution action: a legal `potion use <slot_index>`, "
+                "a legal `potion discard <slot_index>`, or `proceed` to skip this new potion."
+            ),
+            "valid_index_range": f"0..{max(0, len(context.choice_list) - 1)}",
+            "valid_example": valid_example,
+            "allowed_commands": allowed_commands,
+            "selected_reward_index": reward_index,
+            "selected_reward_type": "POTION",
+        }
+
+    def _validation_exhausted_fallback(self, context: AgentContext, working_memory: dict[str, Any]) -> list[str]:
+        if self._is_full_potion_resolution_context(context):
+            available = {str(command).strip().lower() for command in context.available_commands}
+            if Command.PROCEED.value in available:
+                return [Command.PROCEED.value]
+        return []
+
+    def _is_full_potion_resolution_context(self, context: AgentContext) -> bool:
+        if context.handler_name != "CombatRewardHandler":
+            return False
+        if not bool(context.extras.get("potions_full", False)):
+            return False
+        return any(
+            str(summary.get("reward_type", "")).strip().upper() == "POTION"
+            for summary in context.extras.get("reward_summaries", [])
+            if isinstance(summary, dict)
+        )
+
+    def _selected_reward_summary(self, context: AgentContext, proposed_command: str) -> dict[str, Any] | None:
+        tokens = str(proposed_command).split()
+        if len(tokens) != 2 or tokens[0] != Command.CHOOSE.value:
+            return None
+
+        choice = tokens[1].strip().lower()
+        reward_summaries = [
+            summary for summary in context.extras.get("reward_summaries", [])
+            if isinstance(summary, dict)
+        ]
+        if choice.isdigit():
+            choice_index = int(choice)
+            for summary in reward_summaries:
+                if int(summary.get("choice_index", -1)) == choice_index:
+                    return summary
+            return None
+
+        matches = [
+            summary for summary in reward_summaries
+            if str(summary.get("choice_token", "")).strip().lower() == choice
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        return None
+
+    def _full_potion_resolution_commands(self, context: AgentContext) -> list[str]:
+        game_state_ref = context.extras.get("game_state_ref")
+        if not isinstance(game_state_ref, GameState):
+            return [Command.PROCEED.value]
+
+        commands: list[str] = []
+        for slot_index, potion in enumerate(game_state_ref.get_potions()):
+            if not isinstance(potion, dict):
+                continue
+            if bool(potion.get("can_use", False)):
+                commands.append(f"{Command.POTION.value} use {slot_index}")
+            if bool(potion.get("can_discard", False)):
+                commands.append(f"{Command.POTION.value} discard {slot_index}")
+
+        available = {str(command).strip().lower() for command in context.available_commands}
+        if Command.PROCEED.value in available:
+            commands.append(Command.PROCEED.value)
+
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for command in commands:
+            if command in seen:
+                continue
+            seen.add(command)
+            deduped.append(command)
+        return deduped
 
 
 class BossRewardSubagent(RewardSubagentBase):
@@ -578,3 +695,108 @@ class AstrolabeTransformSubagent(RewardSubagentBase):
         if not self.is_in_scope(state):
             return None
         return build_astrolabe_transform_agent_context(state, "AstrolabeTransformHandler")
+
+
+class GridSelectSubagent(RewardSubagentBase):
+    def __init__(
+            self,
+            *,
+            provider: RewardCommandProvider | None = None,
+            langmem_service: LangMemService | None = None,
+            config: RewardSubagentConfig | None = None,
+    ):
+        super().__init__(
+            handler_name="GridSelectHandler",
+            provider=GridSelectLlmProvider() if provider is None else provider,
+            langmem_service=langmem_service,
+            config=config,
+        )
+
+    def is_in_scope(self, state: GameState) -> bool:
+        return (
+            state.screen_type() == ScreenType.GRID.value
+            and not is_astrolabe_transform_state(state)
+        )
+
+    def _build_context(self, state: GameState) -> AgentContext | None:
+        if not self.is_in_scope(state):
+            return None
+        return build_grid_select_agent_context(state, "GridSelectHandler")
+
+    def _deterministic_confirm(self, context: AgentContext) -> RewardCommandProposal | None:
+        picks_remaining = int(context.extras.get("picks_remaining", 1))
+        if picks_remaining > 0:
+            return None
+        available = context.available_commands
+        if "confirm" in available:
+            command = "confirm"
+        elif "proceed" in available:
+            command = "proceed"
+        else:
+            return None
+        return RewardCommandProposal(
+            proposed_command=command,
+            confidence=1.0,
+            explanation="all_cards_selected_confirm",
+            metadata={"reason": "deterministic_confirm"},
+        )
+
+    def _validation_exhausted_fallback(self, context: AgentContext, working_memory: dict[str, Any]) -> list[str]:
+        available = {str(command).strip().lower() for command in context.available_commands}
+        picks_remaining = int(context.extras.get("picks_remaining", 1))
+        if picks_remaining <= 0:
+            if "confirm" in available:
+                return ["confirm"]
+            if "proceed" in available:
+                return ["proceed"]
+
+        selectable_cards = context.extras.get("selectable_cards", [])
+        if "choose" in available and selectable_cards and len(context.choice_list) > 0:
+            return ["choose 0", "wait 30"]
+        return []
+
+    def _model_decide_next_action_node(self, state: RewardSubagentState) -> dict[str, Any]:
+        working_memory = dict(state.get("working_memory", {}))
+        working_memory["decision_loop_count"] = int(working_memory.get("decision_loop_count", 0)) + 1
+
+        if not bool(state.get("in_scope")):
+            return {
+                "working_memory": working_memory,
+                "proposal": RewardCommandProposal(
+                    proposed_command=None,
+                    confidence=1.0,
+                    explanation="grid_scope_ended",
+                    metadata={"reason": "scope_ended"},
+                ),
+            }
+
+        if int(working_memory.get("decision_loop_count", 0)) > self._config.max_decision_loops:
+            working_memory = self._append_step_summary(working_memory, "decision loop guardrail reached")
+            return {
+                "working_memory": working_memory,
+                "proposal": RewardCommandProposal(
+                    proposed_command=None,
+                    confidence=0.0,
+                    explanation="grid_subagent_loop_guardrail",
+                    metadata={"reason": "loop_guardrail"},
+                ),
+            }
+
+        context = state["current_context"]
+        confirm_proposal = self._deterministic_confirm(context)
+        if confirm_proposal is not None:
+            working_memory = self._append_step_summary(working_memory, "deterministic confirm: all cards selected")
+            return {
+                "working_memory": working_memory,
+                "proposal": confirm_proposal,
+                "pending_decision_explanation": confirm_proposal.explanation,
+                "pending_decision_confidence": confirm_proposal.confidence,
+            }
+
+        proposal = self._provider.propose(context, working_memory)
+        return {
+            "working_memory": working_memory,
+            "proposal": proposal,
+            "pending_decision_explanation": proposal.explanation,
+            "pending_decision_confidence": proposal.confidence,
+        }

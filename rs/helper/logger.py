@@ -18,6 +18,7 @@ current_run_missing_events: set[str] = set()
 
 LOG_DIR = Path(ROOT_DIR) / "logs"
 _console_logger_configured = False
+MAX_LOG_FILE_SIZE = 2_000_000_000  # 2 GB per log file
 
 
 def configure_console_logging() -> None:
@@ -40,7 +41,10 @@ def _log_path(filename: str) -> Path:
 
 
 def _append_log_line(filename: str, message: str) -> None:
-    with _log_path(filename).open("a+", encoding="utf-8") as f:
+    path = _log_path(filename)
+    if path.exists() and path.stat().st_size >= MAX_LOG_FILE_SIZE:
+        return
+    with path.open("a+", encoding="utf-8") as f:
         f.write(message + "\n")
 
 

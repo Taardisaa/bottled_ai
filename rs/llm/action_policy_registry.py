@@ -81,7 +81,12 @@ class ActionPolicyRegistry:
         if context.handler_name == "AstrolabeTransformHandler":
             return [proposed_command]
 
-        if context.handler_name in {"CampfireHandler", "ChestHandler", "GridSelectHandler", "HandSelectHandler", "GenericHandler"}:
+        if context.handler_name == "GridSelectHandler":
+            if proposed_command in ("confirm", "proceed"):
+                return [proposed_command]
+            return [proposed_command, "wait 30"]
+
+        if context.handler_name in {"CampfireHandler", "ChestHandler", "HandSelectHandler", "GenericHandler"}:
             return [proposed_command]
 
         return None

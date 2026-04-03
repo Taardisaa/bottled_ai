@@ -1,8 +1,15 @@
 import copy
 import unittest
 
+from rs.llm.agents.base_agent import AgentContext
 from rs.llm.providers.reward_llm_provider import RewardCommandProposal
-from rs.llm.reward_subagent import AstrolabeTransformSubagent, BossRewardSubagent, CombatRewardSubagent
+from rs.llm.reward_subagent import (
+    AstrolabeTransformSubagent,
+    BossRewardSubagent,
+    CombatRewardSubagent,
+    GridSelectSubagent,
+)
+from rs.machine.state import GameState
 from test_helpers.resources import load_resource_state
 
 
@@ -180,10 +187,101 @@ class TestRewardSubagents(unittest.TestCase):
         self.assertEqual([], runtime.command_batches)
         self.assertEqual(2, len(provider.seen_contexts))
 
+    def test_combat_reward_subagent_rejects_choose_potion_when_slots_are_full(self):
+        langmem_service = FakeLangMemService()
+        provider = ScriptedRewardProvider([
+            RewardCommandProposal("choose 0", 0.84, "try_take_new_potion"),
+            RewardCommandProposal("proceed", 0.70, "skip_new_potion"),
+        ])
+        subagent = CombatRewardSubagent(provider=provider, langmem_service=langmem_service)
+        initial_state = load_resource_state("/combat_reward/combat_reward_full_potions.json")
+        final_state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeRewardRuntime(initial_state, [final_state])
+
+        result = subagent.run(initial_state, runtime)
+
+        self.assertTrue(result.handled)
+        self.assertEqual([["proceed"]], runtime.command_batches)
+        self.assertEqual(2, len(provider.seen_contexts))
+        feedback = provider.seen_contexts[1][2]
+        self.assertEqual("potion_capacity_resolution_required", feedback.get("code"))
+        self.assertIn("proceed", feedback.get("allowed_commands", []))
+        self.assertIn("potion discard 0", feedback.get("allowed_commands", []))
+        self.assertIn("potion use 0", feedback.get("allowed_commands", []))
+
+    def test_combat_reward_subagent_full_potion_fallback_skips_new_potion(self):
+        langmem_service = FakeLangMemService()
+        provider = ScriptedRewardProvider([
+            RewardCommandProposal("choose 0", 0.84, "try_take_new_potion"),
+            RewardCommandProposal("choose 0", 0.60, "still_try_take_new_potion"),
+            RewardCommandProposal("potion discard 0", 0.90, "should_not_be_used"),
+        ])
+        subagent = CombatRewardSubagent(provider=provider, langmem_service=langmem_service)
+        initial_state = load_resource_state("/combat_reward/combat_reward_full_potions.json")
+        final_state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeRewardRuntime(initial_state, [final_state])
+
+        result = subagent.run(initial_state, runtime)
+
+        self.assertTrue(result.handled)
+        self.assertEqual([["proceed"]], runtime.command_batches)
+        self.assertEqual(2, len(provider.seen_contexts))
+
+    def test_grid_select_subagent_confirms_when_confirm_up_has_no_selected_cards(self):
+        langmem_service = FakeLangMemService()
+        provider = ScriptedRewardProvider([
+            RewardCommandProposal("choose 0", 0.8, "should_not_be_used"),
+        ])
+        subagent = GridSelectSubagent(provider=provider, langmem_service=langmem_service)
+        initial_state = self._grid_confirm_state(load_resource_state("/other/upgrade_bash.json"))
+        final_state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeRewardRuntime(initial_state, [final_state])
+
+        result = subagent.run(initial_state, runtime)
+
+        self.assertTrue(result.handled)
+        self.assertEqual([["confirm"]], runtime.command_batches)
+        self.assertEqual(0, len(provider.seen_contexts))
+
+    def test_grid_select_validation_fallback_does_not_choose_without_choose_command(self):
+        subagent = GridSelectSubagent(provider=ScriptedRewardProvider([]), langmem_service=FakeLangMemService())
+        context = AgentContext(
+            handler_name="GridSelectHandler",
+            screen_type="GRID",
+            available_commands=["cancel", "wait", "state"],
+            choice_list=["bash"],
+            game_state={},
+            extras={
+                "selectable_cards": [{"choice_index": 0, "name": "bash"}],
+                "picks_remaining": 1,
+            },
+        )
+
+        fallback = subagent._validation_exhausted_fallback(context, {})
+
+        self.assertEqual([], fallback)
+
+    def test_grid_select_validation_fallback_prefers_confirm_when_picks_are_complete(self):
+        subagent = GridSelectSubagent(provider=ScriptedRewardProvider([]), langmem_service=FakeLangMemService())
+        context = AgentContext(
+            handler_name="GridSelectHandler",
+            screen_type="GRID",
+            available_commands=["confirm", "cancel", "wait", "state"],
+            choice_list=["bash"],
+            game_state={},
+            extras={
+                "selectable_cards": [{"choice_index": 0, "name": "bash"}],
+                "picks_remaining": 0,
+            },
+        )
+
+        fallback = subagent._validation_exhausted_fallback(context, {})
+
+        self.assertEqual(["confirm"], fallback)
+
     def _astrolabe_state_with_selected_count(self, source_state, selected_count):
         payload = copy.deepcopy(source_state.json)
         payload["game_state"]["screen_state"]["selected_cards"] = payload["game_state"]["screen_state"]["cards"][:selected_count]
-        from rs.machine.state import GameState
         return GameState(payload)
 
     def _combat_reward_only_card(self, source_state):
@@ -192,7 +290,13 @@ class TestRewardSubagents(unittest.TestCase):
         choices = payload["game_state"]["choice_list"]
         payload["game_state"]["screen_state"]["rewards"] = rewards[-1:]
         payload["game_state"]["choice_list"] = choices[-1:]
-        from rs.machine.state import GameState
+        return GameState(payload)
+
+    def _grid_confirm_state(self, source_state):
+        payload = copy.deepcopy(source_state.json)
+        payload["available_commands"] = ["confirm", "cancel", "wait", "state"]
+        payload["game_state"]["screen_state"]["confirm_up"] = True
+        payload["game_state"]["screen_state"]["selected_cards"] = []
         return GameState(payload)
 
 if __name__ == "__main__":

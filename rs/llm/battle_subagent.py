@@ -1,47 +1,65 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
-from typing import Any, Literal, TypedDict, cast
+from typing import Annotated, Any, Literal, cast
 from uuid import uuid4
 
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
 
 from rs.helper.logger import log_to_run
 from rs.llm.agents.base_agent import AgentContext, AgentDecision
 from rs.llm.battle_runtime import BattleRuntimeAdapter, BattleSessionResult
+from rs.llm.battle_tools import (
+    AnalyzeWithCalculatorTool,
+    EnumerateLegalActionsTool,
+    ValidateBattleCommandTool,
+    analyze_with_calculator,
+    enumerate_legal_actions,
+    make_retrieve_battle_experience_tool,
+    submit_battle_commands,
+    validate_battle_command,
+)
 from rs.llm.integration.battle_context import build_battle_agent_context, is_battle_scope_state
 from rs.llm.langmem_service import LangMemService, get_langmem_service
-from rs.llm.providers.battle_llm_provider import BattleDirective, BattleDirectiveProvider, BattleLlmProvider
+from rs.llm.providers.battle_llm_provider import build_battle_prompt
 from rs.llm.subagent_validation_middleware import validate_proposed_command
 from rs.machine.state import GameState
 
 
-class BattleToolProtocol:
-    name: str
-
-    def run(self, context: AgentContext, payload: dict[str, Any]) -> dict[str, Any]:
-        raise Exception("must be implemented by battle tool")
+class BattleSubagentState(dict):
+    """TypedDict-compatible state class. Using dict subclass so add_messages reducer works."""
 
 
-class BattleSubagentState(TypedDict, total=False):
-    runtime: BattleRuntimeAdapter
-    current_state: GameState
-    current_state_signature: str
-    current_context: AgentContext
-    working_memory: dict[str, Any]
-    session_id: str
-    directive: BattleDirective
-    pending_commands: list[str]
-    pending_required_tools_used: list[str]
-    pending_decision_explanation: str
-    pending_decision_confidence: float
-    action_committed: bool
-    battle_complete: bool
-    handled: bool
-    final_state: GameState
-    executed_commands: list[list[str]]
-    final_summary: str
-    steps: int
+# Actual TypedDict definition for type-checker usage
+try:
+    from typing import TypedDict
+
+    class BattleSubagentState(TypedDict, total=False):  # type: ignore[no-redef]
+        runtime: BattleRuntimeAdapter
+        current_state: GameState
+        current_state_signature: str
+        current_context: AgentContext
+        working_memory: dict[str, Any]
+        session_id: str
+        messages: Annotated[list, add_messages]
+        pending_commands: list[str]
+        pending_decision_explanation: str
+        pending_decision_confidence: float
+        action_committed: bool
+        battle_complete: bool
+        skip_agent: bool
+        validation_attempt_count: int
+        handled: bool
+        final_state: GameState
+        executed_commands: list[list[str]]
+        final_summary: str
+        steps: int
+except Exception:
+    pass
 
 
 @dataclass
@@ -57,13 +75,10 @@ class BattleSubagentConfig:
 class BattleWorkingMemory:
     session_id: str
     recent_step_summaries: list[str] = field(default_factory=list)
-    recent_tool_results: list[dict[str, Any]] = field(default_factory=list)
     executed_command_batches: list[list[str]] = field(default_factory=list)
     retrieved_episodic_memories: str = "none"
     retrieved_semantic_memories: str = "none"
     langmem_status: str = "disabled_by_config"
-    tool_call_count: int = 0
-    decision_loop_count: int = 0
     no_progress_count: int = 0
     last_state_signature: str = ""
     last_executed_batch: list[str] = field(default_factory=list)
@@ -72,37 +87,65 @@ class BattleWorkingMemory:
         return {
             "session_id": self.session_id,
             "recent_step_summaries": list(self.recent_step_summaries),
-            "recent_tool_results": list(self.recent_tool_results),
             "executed_command_batches": [list(batch) for batch in self.executed_command_batches],
             "retrieved_episodic_memories": self.retrieved_episodic_memories,
             "retrieved_semantic_memories": self.retrieved_semantic_memories,
             "langmem_status": self.langmem_status,
-            "tool_call_count": self.tool_call_count,
-            "decision_loop_count": self.decision_loop_count,
             "no_progress_count": self.no_progress_count,
             "last_state_signature": self.last_state_signature,
             "last_executed_batch": list(self.last_executed_batch),
         }
 
 
+@dataclass
+class BattleSessionResult:
+    handled: bool
+    final_state: GameState | None = None
+    session_id: str = ""
+    executed_commands: list[list[str]] = field(default_factory=list)
+    steps: int = 0
+    summary: str = ""
+
+
 class BattleSubagent:
     def __init__(
             self,
             *,
-            provider: BattleDirectiveProvider | None = None,
+            chat_model: Any | None = None,
             langmem_service: LangMemService | None = None,
-            tools: list[BattleToolProtocol] | None = None,
             config: BattleSubagentConfig | None = None,
     ):
-        self._provider = BattleLlmProvider() if provider is None else provider
         self._langmem_service = get_langmem_service() if langmem_service is None else langmem_service
         self._config = BattleSubagentConfig() if config is None else config
-        self._tools = {tool.name: tool for tool in (tools or [])}
-        self._compiled_graph: Any | None = None
 
-    def register_tool(self, tool: BattleToolProtocol) -> None:
-        self._tools[tool.name] = tool
-        self._compiled_graph = None
+        if chat_model is None:
+            from langchain_openai import ChatOpenAI
+            from rs.utils.config import config as llm_config
+            chat_model = ChatOpenAI(
+                model=llm_config.fast_llm_model,
+                base_url=llm_config.llm_base_url or llm_config.openai_base_url,
+                api_key=llm_config.llm_api_key or llm_config.openai_key,
+                temperature=0.6,
+            )
+
+        retrieve_tool = make_retrieve_battle_experience_tool(self._langmem_service)
+        self._langgraph_tools = [
+            enumerate_legal_actions,
+            analyze_with_calculator,
+            validate_battle_command,
+            retrieve_tool,
+            submit_battle_commands,
+        ]
+
+        self._model_with_tools = chat_model.bind_tools(self._langgraph_tools)
+        self._tool_node = ToolNode(self._langgraph_tools)
+
+        # Implementation instances for direct guardrail use (not via LLM)
+        self._enumerate_tool = EnumerateLegalActionsTool()
+        self._calculator_tool = AnalyzeWithCalculatorTool()
+        self._validator_tool = ValidateBattleCommandTool()
+
+        self._compiled_graph: Any | None = None
 
     def run(self, state: GameState, runtime: BattleRuntimeAdapter) -> BattleSessionResult:
         output = dict(self.get_compiled_graph().invoke({
@@ -124,8 +167,8 @@ class BattleSubagent:
             graph.add_node("session_bootstrap", self._session_bootstrap_node)
             graph.add_node("retrieve_battle_experience", self._retrieve_battle_experience_node)
             graph.add_node("state_ingest", self._state_ingest_node)
-            graph.add_node("model_decide_next_step", self._model_decide_next_step_node)
-            graph.add_node("tool_execute", self._tool_execute_node)
+            graph.add_node("agent_node", self._agent_node)
+            graph.add_node("tool_node", self._tool_node)
             graph.add_node("action_validate", self._action_validate_node)
             graph.add_node("action_commit", self._action_commit_node)
             graph.add_node("exit_check", self._exit_check_node)
@@ -134,27 +177,34 @@ class BattleSubagent:
             graph.add_edge(START, "session_bootstrap")
             graph.add_edge("session_bootstrap", "retrieve_battle_experience")
             graph.add_edge("retrieve_battle_experience", "state_ingest")
-            graph.add_edge("state_ingest", "model_decide_next_step")
             graph.add_conditional_edges(
-                "model_decide_next_step",
-                self._route_after_model_decision,
+                "state_ingest",
+                self._route_after_state_ingest,
                 {
-                    "tool_execute": "tool_execute",
-                    "action_validate": "action_validate",
+                    "agent_node": "agent_node",
+                    "action_commit": "action_commit",
                     "session_finalize": "session_finalize",
                 },
             )
             graph.add_conditional_edges(
-                "tool_execute",
-                self._route_after_tool_execution,
+                "agent_node",
+                self._should_continue,
                 {
-                    "model_decide_next_step": "model_decide_next_step",
-                    "exit_check": "exit_check",
+                    "tools": "tool_node",
                     "action_validate": "action_validate",
                     "session_finalize": "session_finalize",
                 },
             )
-            graph.add_edge("action_validate", "action_commit")
+            graph.add_edge("tool_node", "agent_node")
+            graph.add_conditional_edges(
+                "action_validate",
+                self._route_after_action_validate,
+                {
+                    "agent_node": "agent_node",
+                    "action_commit": "action_commit",
+                    "session_finalize": "session_finalize",
+                },
+            )
             graph.add_edge("action_commit", "exit_check")
             graph.add_conditional_edges(
                 "exit_check",
@@ -168,19 +218,26 @@ class BattleSubagent:
             self._compiled_graph = graph.compile()
         return self._compiled_graph
 
-    def _session_bootstrap_node(self, state: BattleSubagentState) -> dict[str, Any]:
+    # ------------------------------------------------------------------
+    # Nodes
+    # ------------------------------------------------------------------
+
+    def _session_bootstrap_node(self, _state: BattleSubagentState) -> dict[str, Any]:
         session_id = uuid4().hex
         working_memory = BattleWorkingMemory(session_id=session_id)
         log_to_run(f"BattleSubagent session started: {session_id}")
         return {
             "session_id": session_id,
             "working_memory": working_memory.to_dict(),
-            "pending_required_tools_used": [],
+            "messages": [],
+            "pending_commands": [],
             "executed_commands": [],
             "steps": 0,
             "handled": False,
             "battle_complete": False,
             "action_committed": False,
+            "skip_agent": False,
+            "validation_attempt_count": 0,
             "final_summary": "",
         }
 
@@ -198,6 +255,12 @@ class BattleSubagent:
         working_memory["retrieved_episodic_memories"] = payload.get("retrieved_episodic_memories", "none")
         working_memory["retrieved_semantic_memories"] = payload.get("retrieved_semantic_memories", "none")
         working_memory["langmem_status"] = payload.get("langmem_status", self._langmem_service.status())
+        log_to_run(
+            "BattleSubagent memory loaded: "
+            f"status={working_memory['langmem_status']} | "
+            f"episodic={self._preview_log_text(str(working_memory['retrieved_episodic_memories']))} | "
+            f"semantic={self._preview_log_text(str(working_memory['retrieved_semantic_memories']))}"
+        )
         return {"working_memory": working_memory}
 
     def _state_ingest_node(self, state: BattleSubagentState) -> dict[str, Any]:
@@ -217,6 +280,46 @@ class BattleSubagent:
         if not str(working_memory.get("last_state_signature", "")).strip():
             working_memory["last_state_signature"] = current_signature
         battle_complete = not is_battle_scope_state(current_state)
+
+        # No-progress guardrail — bypass the agent entirely
+        no_progress_count = int(working_memory.get("no_progress_count", 0))
+        if not battle_complete and no_progress_count >= self._config.no_progress_limit:
+            last_batch = [str(c) for c in working_memory.get("last_executed_batch", []) if str(c).strip()]
+            fallback_commands = self._build_guardrail_fallback_commands(
+                context, prefer_progression=True, rejected_batches=[last_batch] if last_batch else None
+            )
+            working_memory = self._append_step_summary(
+                working_memory,
+                f"no-progress guardrail triggered after {no_progress_count} repeated signatures",
+            )
+            return {
+                "current_state": current_state,
+                "current_state_signature": current_signature,
+                "current_context": context,
+                "working_memory": working_memory,
+                "battle_complete": battle_complete,
+                "action_committed": False,
+                "validation_attempt_count": 0,
+                "skip_agent": True,
+                "pending_commands": fallback_commands,
+                "pending_decision_explanation": "battle_subagent_no_progress_guardrail",
+                "pending_decision_confidence": 0.25,
+            }
+
+        # Normal path — reset messages for this turn and let agent decide
+        log_to_run(
+            "BattleSubagent state ingest: "
+            f"floor={context.game_state.get('floor', 'unknown')} | "
+            f"turn={context.game_state.get('turn', 'unknown')} | "
+            f"hp={context.game_state.get('current_hp', 'unknown')}/{context.game_state.get('max_hp', 'unknown')} | "
+            f"commands={len(context.available_commands)} | "
+            f"choices={len(context.choice_list)}"
+        )
+        prompt = build_battle_prompt(context, working_memory)
+        existing_messages = state.get("messages", [])
+        removals = [RemoveMessage(id=m.id) for m in existing_messages if getattr(m, "id", None)]
+        new_message = HumanMessage(content=prompt)
+
         return {
             "current_state": current_state,
             "current_state_signature": current_signature,
@@ -224,277 +327,164 @@ class BattleSubagent:
             "working_memory": working_memory,
             "battle_complete": battle_complete,
             "action_committed": False,
+            "messages": removals + [new_message],
+            "validation_attempt_count": 0,
+            "skip_agent": False,
+            "pending_commands": [],
+            "pending_decision_explanation": "",
+            "pending_decision_confidence": 0.0,
         }
 
-    def _model_decide_next_step_node(self, state: BattleSubagentState) -> dict[str, Any]:
-        working_memory = dict(state["working_memory"])
-        working_memory["decision_loop_count"] = int(working_memory.get("decision_loop_count", 0)) + 1
-
-        if bool(state.get("battle_complete")):
-            directive = BattleDirective(mode="stop", explanation="battle_scope_ended", confidence=1.0)
-            return {"directive": directive, "working_memory": working_memory}
-
-        no_progress_count = int(working_memory.get("no_progress_count", 0))
-        if no_progress_count >= self._config.no_progress_limit:
-            context = state["current_context"]
-            last_batch = [str(command) for command in working_memory.get("last_executed_batch", []) if str(command).strip()]
-            fallback_commands = self._build_guardrail_fallback_commands(
-                context,
-                prefer_progression=True,
-                rejected_batches=[last_batch] if last_batch else None,
-            )
-            working_memory = self._append_step_summary(
-                working_memory,
-                f"no-progress guardrail triggered after {no_progress_count} repeated signatures",
-            )
-            directive = BattleDirective(
-                mode="action" if fallback_commands else "stop",
-                explanation="battle_subagent_no_progress_guardrail",
-                confidence=0.25,
-                commands=fallback_commands,
-            )
-            return {"directive": directive, "working_memory": working_memory}
-
-        if int(working_memory.get("decision_loop_count", 0)) > self._config.max_decision_loops:
-            fallback_commands = self._build_guardrail_fallback_commands(state["current_context"])
-            directive = BattleDirective(
-                mode="action" if fallback_commands else "stop",
-                explanation="battle_subagent_loop_guardrail",
-                confidence=0.25,
-                commands=fallback_commands,
-            )
-            return {"directive": directive, "working_memory": working_memory}
-
-        context = state["current_context"]
-        directive = self._provider.propose(context, working_memory, self._tool_descriptions())
-        return {
-            "directive": directive,
-            "working_memory": working_memory,
-            "pending_decision_explanation": directive.explanation,
-            "pending_decision_confidence": directive.confidence,
-        }
-
-    def _route_after_model_decision(self, state: BattleSubagentState) -> Literal["tool_execute", "action_validate", "session_finalize"]:
-        directive = state.get("directive")
-        if directive is None:
-            return "session_finalize"
-        if directive.mode == "tool":
-            return "tool_execute"
-        if directive.mode == "action":
-            return "action_validate"
-        return "session_finalize"
-
-    def _tool_execute_node(self, state: BattleSubagentState) -> dict[str, Any]:
-        context = state["current_context"]
-        directive = state["directive"]
-        working_memory = dict(state["working_memory"])
-        tool_names = list(state.get("pending_required_tools_used", []))
-
-        if directive.tool_name is None or directive.tool_name not in self._tools:
-            working_memory = self._append_step_summary(working_memory, "invalid tool request")
-            return {
-                "working_memory": working_memory,
-                "directive": BattleDirective(
-                    mode="action",
-                    explanation="invalid_tool_request",
-                    confidence=0.2,
-                    commands=self._build_guardrail_fallback_commands(context),
-                ),
-            }
-
-        working_memory["tool_call_count"] = int(working_memory.get("tool_call_count", 0)) + 1
-        if int(working_memory.get("tool_call_count", 0)) > self._config.max_tool_calls:
-            working_memory = self._append_step_summary(working_memory, "tool call guardrail reached")
-            return {
-                "working_memory": working_memory,
-                "directive": BattleDirective(
-                    mode="action",
-                    explanation="tool_call_guardrail",
-                    confidence=0.2,
-                    commands=self._build_guardrail_fallback_commands(context),
-                ),
-            }
-
-        tool = self._tools[directive.tool_name]
-        result = tool.run(context, dict(directive.tool_payload or {}))
-        tool_names.append(tool.name)
-        working_memory = self._append_tool_result(working_memory, tool.name, result)
-
-        if tool.name == "retrieve_battle_experience":
-            working_memory["retrieved_episodic_memories"] = result.get(
-                "retrieved_episodic_memories",
-                working_memory.get("retrieved_episodic_memories", "none"),
-            )
-            working_memory["retrieved_semantic_memories"] = result.get(
-                "retrieved_semantic_memories",
-                working_memory.get("retrieved_semantic_memories", "none"),
-            )
-            working_memory["langmem_status"] = result.get(
-                "langmem_status",
-                working_memory.get("langmem_status", self._langmem_service.status()),
-            )
-
-        if tool.name == "execute_battle_command" and bool(result.get("executed")):
-            commands = [str(command) for command in result.get("commands", [])]
-            working_memory.setdefault("executed_command_batches", []).append(commands)
-            working_memory = self._append_step_summary(working_memory, f"executed via tool: {', '.join(commands)}")
-            self._record_accepted_decision(
-                context,
-                commands,
-                str(state.get("pending_decision_explanation", directive.explanation)),
-                float(state.get("pending_decision_confidence", directive.confidence)),
-                tool_names,
-            )
-            return {
-                "working_memory": working_memory,
-                "pending_required_tools_used": [],
-                "current_state": cast(GameState, result.get("state", state["current_state"])),
-                "action_committed": True,
-                "executed_commands": list(working_memory.get("executed_command_batches", [])),
-                "steps": len(working_memory.get("executed_command_batches", [])),
-            }
-
-        return {
-            "working_memory": working_memory,
-            "pending_required_tools_used": tool_names,
-            "action_committed": False,
-        }
-
-    def _route_after_tool_execution(self, state: BattleSubagentState) -> Literal["model_decide_next_step", "exit_check", "session_finalize", "action_validate"]:
-        if bool(state.get("action_committed")):
-            return "exit_check"
-        directive = state.get("directive")
-        if directive is not None and directive.mode == "action":
-            return "action_validate"
-        return "model_decide_next_step"
+    def _agent_node(self, state: BattleSubagentState) -> dict[str, Any]:
+        messages = list(state.get("messages", []))
+        response = self._model_with_tools.invoke(messages)
+        tool_call_names = [str(tc.get("name", "")) for tc in getattr(response, "tool_calls", []) if str(tc.get("name", "")).strip()]
+        log_to_run(
+            "BattleSubagent model response: "
+            f"tool_calls={tool_call_names or ['none']} | "
+            f"content={self._preview_log_text(self._extract_explanation([response]))}"
+        )
+        return {"messages": [response]}
 
     def _action_validate_node(self, state: BattleSubagentState) -> dict[str, Any]:
+        messages = list(state.get("messages", []))
+        working_memory = dict(state.get("working_memory", {}))
         context = state["current_context"]
-        working_memory = dict(state["working_memory"])
-        directive = state["directive"]
-        latest_explanation = str(state.get("pending_decision_explanation", directive.explanation))
-        latest_confidence = float(state.get("pending_decision_confidence", directive.confidence))
-        validator = self._tools["validate_battle_command"]
-        last_rejected_commands: list[str] = []
-        last_feedback_payload: dict[str, Any] = {}
+        validation_attempt = int(state.get("validation_attempt_count", 0))
 
-        for attempt in range(self._config.max_validation_attempts):
-            commands = [str(command).strip() for command in directive.commands if str(command).strip()]
-            last_rejected_commands = list(commands)
-            feedback_payload: dict[str, Any] | None = None
-            if not commands:
-                feedback_payload = {
-                    "rejected_command": "",
-                    "code": "empty_action_commands",
-                    "message": "action mode requires at least one command",
-                    "corrective_hint": "return at least one executable command.",
-                    "valid_index_range": f"0..{max(0, len(context.choice_list) - 1)}",
-                    "valid_example": "choose 0" if context.choice_list else "none",
-                }
-            else:
-                for command in commands:
-                    # Only enforce the shared middleware on choose-commands.
-                    # Battle-specific command legality (play/potion/etc.) is owned by
-                    # validate_battle_command to avoid cross-validator mismatch.
-                    if not str(command).startswith("choose "):
-                        continue
-                    command_validation, command_feedback = validate_proposed_command(context, command)
-                    if not command_validation.is_valid:
-                        feedback_payload = dict(command_feedback or {})
-                        break
+        commands = self._parse_submitted_commands(messages)
 
-            if feedback_payload is None:
-                validation = validator.run(context, {"commands": commands})
-                if bool(validation.get("is_valid")):
-                    return {
-                        "pending_commands": commands,
-                        "working_memory": working_memory,
-                        "pending_decision_explanation": latest_explanation,
-                        "pending_decision_confidence": latest_confidence,
-                    }
-                feedback_payload = {
-                    "rejected_command": " | ".join(commands),
-                    "code": "batch_validation_failed",
-                    "message": str(validation.get("errors", [])),
-                    "corrective_hint": "return commands that satisfy validate_battle_command.",
-                    "valid_index_range": f"0..{max(0, len(context.choice_list) - 1)}",
-                    "valid_example": "choose 0" if context.choice_list else "none",
-                }
-
-            last_feedback_payload = dict(feedback_payload or {})
-            working_memory = self._append_step_summary(
-                working_memory,
-                f"validation failed for action directive: {feedback_payload.get('code', 'unknown')}",
-            )
-            if attempt + 1 >= self._config.max_validation_attempts:
-                break
-
-            directive = self._provider.propose(
-                context,
-                working_memory,
-                self._tool_descriptions(),
-                validation_feedback=feedback_payload,
-            )
-            latest_explanation = str(directive.explanation)
-            try:
-                latest_confidence = float(directive.confidence)
-            except (TypeError, ValueError):
-                latest_confidence = 0.0
-            if directive.mode != "action":
-                break
-
-        fallback_commands = self._build_guardrail_fallback_commands(context)
-        if fallback_commands:
-            fallback_validation = validator.run(context, {"commands": fallback_commands})
-            if bool(fallback_validation.get("is_valid")):
-                working_memory = self._append_step_summary(working_memory, "validation failed; using guardrail fallback")
+        if not commands:
+            fallback = self._build_guardrail_fallback_commands(context)
+            if fallback:
+                working_memory = self._append_step_summary(working_memory, "no submission, using guardrail fallback")
                 log_to_run(
-                    "BattleSubagent replaced invalid action directive with guardrail fallback: "
-                    f"rejected={last_rejected_commands}, "
-                    f"reason={last_feedback_payload.get('code', 'unknown')}, "
-                    f"details={last_feedback_payload.get('message', '')}, "
-                    f"fallback={fallback_commands}"
+                    "BattleSubagent validation produced no commands; "
+                    f"using fallback={fallback}"
                 )
                 return {
-                    "pending_commands": fallback_commands,
+                    "pending_commands": fallback,
                     "working_memory": working_memory,
+                    "validation_attempt_count": 0,
+                    "pending_decision_explanation": "guardrail_no_submission",
+                    "pending_decision_confidence": 0.25,
                 }
+            working_memory = self._append_step_summary(working_memory, "no submission, no guardrail fallback")
+            log_to_run("BattleSubagent validation produced no commands and no fallback was available")
+            return {"pending_commands": [], "working_memory": working_memory, "validation_attempt_count": 0}
+
+        # Validate submitted commands
+        feedback: dict[str, Any] | None = None
+        for command in commands:
+            if not command.startswith("choose "):
+                continue
+            command_validation, command_feedback = validate_proposed_command(context, command)
+            if not command_validation.is_valid:
+                feedback = dict(command_feedback or {})
+                break
+
+        if feedback is None:
+            validation = self._validator_tool.run(context, {"commands": commands})
+            if bool(validation.get("is_valid")):
+                explanation = self._extract_explanation(messages)
+                log_to_run(
+                    "BattleSubagent accepted submission: "
+                    f"commands={commands} | "
+                    f"explanation={self._preview_log_text(explanation)}"
+                )
+                return {
+                    "pending_commands": commands,
+                    "working_memory": working_memory,
+                    "validation_attempt_count": 0,
+                    "pending_decision_explanation": explanation,
+                    "pending_decision_confidence": 0.8,
+                }
+            feedback = {
+                "rejected_command": " | ".join(commands),
+                "code": "batch_validation_failed",
+                "message": str(validation.get("errors", [])),
+                "corrective_hint": "Use validate_battle_command before calling submit_battle_commands.",
+            }
 
         working_memory = self._append_step_summary(
             working_memory,
-            "validation failed with no fallback",
+            f"validation failed for submitted commands: {feedback.get('code', 'unknown')}",
         )
-        return {
-            "pending_commands": [],
-            "working_memory": working_memory,
-        }
+        log_to_run(
+            "BattleSubagent validation failed: "
+            f"commands={commands} | "
+            f"code={feedback.get('code', 'unknown')} | "
+            f"message={self._preview_log_text(str(feedback.get('message', '')))}"
+        )
+
+        if validation_attempt + 1 < self._config.max_validation_attempts:
+            corrective = HumanMessage(content=json.dumps(
+                {
+                    "validation_error": feedback,
+                    "instruction": (
+                        "Your last submit_battle_commands call was rejected. "
+                        "Use validate_battle_command to verify your commands first, "
+                        "then call submit_battle_commands again with valid commands."
+                    ),
+                },
+                ensure_ascii=False,
+            ))
+            return {
+                "messages": [corrective],
+                "working_memory": working_memory,
+                "validation_attempt_count": validation_attempt + 1,
+                "pending_commands": [],
+            }
+
+        # Exhausted retries — use guardrail
+        fallback = self._build_guardrail_fallback_commands(context, rejected_batches=[list(commands)])
+        if fallback:
+            working_memory = self._append_step_summary(working_memory, "validation exhausted, using guardrail fallback")
+            log_to_run(
+                f"BattleSubagent replaced invalid submission with guardrail fallback: "
+                f"rejected={commands}, reason={feedback.get('code', 'unknown')}, fallback={fallback}"
+            )
+            return {
+                "pending_commands": fallback,
+                "working_memory": working_memory,
+                "validation_attempt_count": 0,
+                "pending_decision_explanation": "guardrail_validation_exhausted",
+                "pending_decision_confidence": 0.25,
+            }
+
+        working_memory = self._append_step_summary(working_memory, "validation failed with no fallback")
+        return {"pending_commands": [], "working_memory": working_memory, "validation_attempt_count": 0}
 
     def _action_commit_node(self, state: BattleSubagentState) -> dict[str, Any]:
-        commands = [str(command) for command in state.get("pending_commands", []) if str(command).strip()]
+        commands = [str(c) for c in state.get("pending_commands", []) if str(c).strip()]
         if not commands:
             return {"action_committed": False}
 
         context = state["current_context"]
-        executor = self._tools["execute_battle_command"]
-        result = executor.run(context, {"commands": commands})
-        if not bool(result.get("executed")):
-            working_memory = self._append_step_summary(dict(state["working_memory"]), f"execution failed: {result.get('summary', result.get('validation'))}")
-            update: dict[str, Any] = {"working_memory": working_memory, "action_committed": False}
-            partial_state = result.get("state")
-            if partial_state is not None:
-                update["current_state"] = partial_state
-            return update
+        runtime = state["runtime"]
+        log_to_run(f"BattleSubagent executing commands: {commands}")
 
-        working_memory = dict(state["working_memory"])
+        try:
+            next_state = runtime.execute(commands)
+        except Exception as exc:
+            working_memory = self._append_step_summary(
+                dict(state.get("working_memory", {})), f"execution failed: {exc}"
+            )
+            log_to_run(f"BattleSubagent execution failed: commands={commands}, error={exc}")
+            return {
+                "working_memory": working_memory,
+                "action_committed": False,
+                "current_state": runtime.current_state(),
+            }
+
+        working_memory = dict(state.get("working_memory", {}))
         previous_signature = str(state.get("current_state_signature", ""))
-        next_state = cast(GameState, result.get("state", state["current_state"]))
         next_signature = self._state_signature(next_state)
         no_progress_count = int(working_memory.get("no_progress_count", 0))
         if previous_signature and previous_signature == next_signature:
             no_progress_count += 1
             working_memory = self._append_step_summary(
-                working_memory,
-                f"no progress detected after commands: {', '.join(commands)}",
+                working_memory, f"no progress detected after commands: {', '.join(commands)}"
             )
         else:
             no_progress_count = 0
@@ -503,18 +493,23 @@ class BattleSubagent:
         working_memory["last_executed_batch"] = list(commands)
         working_memory.setdefault("executed_command_batches", []).append(commands)
         working_memory = self._append_step_summary(working_memory, f"executed command batch: {', '.join(commands)}")
+        log_to_run(
+            "BattleSubagent post-execution state: "
+            f"screen={next_state.screen_type()} | "
+            f"floor={next_state.floor()} | "
+            f"signature={self._preview_log_text(next_signature, limit=96)}"
+        )
         self._record_accepted_decision(
             context,
             commands,
             str(state.get("pending_decision_explanation", "")),
             float(state.get("pending_decision_confidence", 0.0)),
-            list(state.get("pending_required_tools_used", [])),
+            self._extract_tool_names_used(list(state.get("messages", []))),
         )
         return {
             "current_state": next_state,
             "current_state_signature": next_signature,
             "working_memory": working_memory,
-            "pending_required_tools_used": [],
             "action_committed": True,
             "executed_commands": list(working_memory.get("executed_command_batches", [])),
             "steps": len(working_memory.get("executed_command_batches", [])),
@@ -529,11 +524,6 @@ class BattleSubagent:
             "battle_complete": battle_complete,
             "handled": bool(state.get("action_committed", False)) or battle_complete,
         }
-
-    def _route_after_exit_check(self, state: BattleSubagentState) -> Literal["state_ingest", "session_finalize"]:
-        if bool(state.get("battle_complete")):
-            return "session_finalize"
-        return "state_ingest"
 
     def _session_finalize_node(self, state: BattleSubagentState) -> dict[str, Any]:
         runtime = state["runtime"]
@@ -568,14 +558,68 @@ class BattleSubagent:
             "steps": len(working_memory.get("executed_command_batches", [])),
         }
 
-    def _tool_descriptions(self) -> dict[str, str]:
-        return {
-            "enumerate_legal_actions": "List currently legal battle commands for the exact text state.",
-            "analyze_with_calculator": "Ask the preserved rs.calculator engine for a legacy recommended command batch.",
-            "validate_battle_command": "Validate one command or command batch against the exact current battle state.",
-            "execute_battle_command": "Execute a validated command batch through the live battle runtime and return the next state.",
-            "retrieve_battle_experience": "Retrieve relevant LangMem episodic and semantic battle memories.",
-        }
+    # ------------------------------------------------------------------
+    # Routers
+    # ------------------------------------------------------------------
+
+    def _route_after_state_ingest(
+            self, state: BattleSubagentState
+    ) -> Literal["agent_node", "action_commit", "session_finalize"]:
+        if bool(state.get("battle_complete")):
+            return "session_finalize"
+        if bool(state.get("skip_agent")):
+            return "action_commit"
+        return "agent_node"
+
+    def _should_continue(
+            self, state: BattleSubagentState
+    ) -> Literal["tools", "action_validate", "session_finalize"]:
+        if bool(state.get("battle_complete")):
+            return "session_finalize"
+
+        messages = state.get("messages", [])
+        if not messages:
+            return "session_finalize"
+
+        last = messages[-1]
+        tool_calls = getattr(last, "tool_calls", None) or []
+
+        if not tool_calls:
+            return "action_validate"
+
+        for tc in tool_calls:
+            if tc.get("name") == "submit_battle_commands":
+                return "action_validate"
+
+        tool_message_count = sum(1 for m in messages if isinstance(m, ToolMessage))
+        ai_message_count = sum(1 for m in messages if isinstance(m, AIMessage))
+        if (
+            tool_message_count >= self._config.max_tool_calls
+            or ai_message_count >= self._config.max_decision_loops
+        ):
+            return "action_validate"
+
+        return "tools"
+
+    def _route_after_action_validate(
+            self, state: BattleSubagentState
+    ) -> Literal["agent_node", "action_commit", "session_finalize"]:
+        if int(state.get("validation_attempt_count", 0)) > 0:
+            return "agent_node"
+        if state.get("pending_commands"):
+            return "action_commit"
+        return "session_finalize"
+
+    def _route_after_exit_check(
+            self, state: BattleSubagentState
+    ) -> Literal["state_ingest", "session_finalize"]:
+        if bool(state.get("battle_complete")):
+            return "session_finalize"
+        return "state_ingest"
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     def _build_guardrail_fallback_commands(
             self,
@@ -584,55 +628,46 @@ class BattleSubagent:
             prefer_progression: bool = False,
             rejected_batches: list[list[str]] | None = None,
     ) -> list[str]:
-        calculator_tool = self._tools.get("analyze_with_calculator")
-        validator_tool = self._tools.get("validate_battle_command")
-        if validator_tool is None:
-            return []
-
         rejected = {
-            tuple(str(command).strip() for command in batch if str(command).strip())
+            tuple(str(c).strip() for c in batch if str(c).strip())
             for batch in (rejected_batches or [])
             if batch
         }
 
-        progression_candidates = [["confirm"], ["proceed"]]
         if prefer_progression:
-            for candidate in progression_candidates:
+            for candidate in [["confirm"], ["proceed"]]:
                 normalized = tuple(candidate)
                 if normalized in rejected:
                     continue
-                validation = validator_tool.run(context, {"commands": candidate})
+                validation = self._validator_tool.run(context, {"commands": candidate})
                 if bool(validation.get("is_valid")):
                     return candidate
 
-        if calculator_tool is not None and validator_tool is not None:
-            calculator_result = calculator_tool.run(context, {"max_path_count": self._config.fallback_max_path_count})
-            recommended_commands = [str(command) for command in calculator_result.get("recommended_commands", [])]
-            if recommended_commands:
-                normalized = tuple(command.strip() for command in recommended_commands if command.strip())
-                if normalized in rejected:
-                    recommended_commands = []
-                if prefer_progression and recommended_commands and self._is_choose_only_batch(recommended_commands):
-                    recommended_commands = []
-            if recommended_commands:
-                validation = validator_tool.run(context, {"commands": recommended_commands})
-                if bool(validation.get("is_valid")):
-                    return recommended_commands
+        calculator_result = self._calculator_tool.run(context, {"max_path_count": self._config.fallback_max_path_count})
+        recommended = [str(c) for c in calculator_result.get("recommended_commands", [])]
+        if recommended:
+            normalized = tuple(c.strip() for c in recommended if c.strip())
+            if normalized in rejected:
+                recommended = []
+            elif prefer_progression and self._is_choose_only_batch(recommended):
+                recommended = []
+        if recommended:
+            validation = self._validator_tool.run(context, {"commands": recommended})
+            if bool(validation.get("is_valid")):
+                return recommended
 
-        enumerate_tool = self._tools.get("enumerate_legal_actions")
-        if enumerate_tool is not None and validator_tool is not None:
-            legal = enumerate_tool.run(context, {})
-            commands = [str(command) for command in legal.get("commands", [])]
-            if prefer_progression:
-                commands = sorted(commands, key=lambda command: 1 if command.startswith("choose ") else 0)
-            for command in commands:
-                candidate = [str(command)]
-                normalized = tuple(item.strip() for item in candidate if item.strip())
-                if normalized in rejected:
-                    continue
-                validation = validator_tool.run(context, {"commands": candidate})
-                if bool(validation.get("is_valid")):
-                    return candidate
+        legal = self._enumerate_tool.run(context, {})
+        commands = [str(c) for c in legal.get("commands", [])]
+        if prefer_progression:
+            commands = sorted(commands, key=lambda c: 1 if c.startswith("choose ") else 0)
+        for command in commands:
+            candidate = [command]
+            normalized = tuple(item.strip() for item in candidate if item.strip())
+            if normalized in rejected:
+                continue
+            validation = self._validator_tool.run(context, {"commands": candidate})
+            if bool(validation.get("is_valid")):
+                return candidate
 
         return []
 
@@ -670,20 +705,55 @@ class BattleSubagent:
         )
 
     @staticmethod
-    def _append_tool_result(working_memory: dict[str, Any], tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
-        result_preview = {
-            "tool_name": tool_name,
-            "summary": str(result.get("summary", "")) or str(result.get("recommended_commands", result.get("commands", ""))),
-        }
-        working_memory.setdefault("recent_tool_results", []).append(result_preview)
-        working_memory["recent_tool_results"] = working_memory["recent_tool_results"][-8:]
-        return working_memory
+    def _parse_submitted_commands(messages: list) -> list[str]:
+        for message in reversed(messages):
+            if not isinstance(message, AIMessage) or not message.tool_calls:
+                continue
+            for tc in message.tool_calls:
+                if tc.get("name") == "submit_battle_commands":
+                    args = tc.get("args", {})
+                    if isinstance(args, dict):
+                        cmds = args.get("commands", [])
+                        return [str(c).strip() for c in cmds if str(c).strip()]
+        return []
+
+    @staticmethod
+    def _extract_explanation(messages: list) -> str:
+        for message in reversed(messages):
+            if not isinstance(message, AIMessage):
+                continue
+            content = message.content
+            if isinstance(content, str) and content.strip():
+                return content.strip()[:200]
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text = str(block.get("text", "")).strip()
+                        if text:
+                            return text[:200]
+        return "battle_subagent_step"
+
+    @staticmethod
+    def _extract_tool_names_used(messages: list) -> list[str]:
+        return [
+            m.name for m in messages
+            if isinstance(m, ToolMessage) and m.name and m.name != "submit_battle_commands"
+        ]
 
     @staticmethod
     def _append_step_summary(working_memory: dict[str, Any], summary: str) -> dict[str, Any]:
         working_memory.setdefault("recent_step_summaries", []).append(summary)
         working_memory["recent_step_summaries"] = working_memory["recent_step_summaries"][-12:]
         return working_memory
+
+    @staticmethod
+    def _preview_log_text(value: str, limit: int = 160) -> str:
+        normalized = " ".join(str(value).split())
+        if limit < 0:
+            return normalized
+        if len(normalized) <= limit:
+            return normalized
+        return normalized[:limit - 3] + "..."
 
     @staticmethod
     def _state_signature(state: GameState) -> str:
@@ -698,7 +768,7 @@ class BattleSubagent:
         ) if isinstance(selected, list) else tuple()
         available_commands_raw = state.json.get("available_commands", [])
         available_commands = tuple(
-            sorted(str(command).strip() for command in available_commands_raw if str(command).strip())
+            sorted(str(c).strip() for c in available_commands_raw if str(c).strip())
         ) if isinstance(available_commands_raw, list) else tuple()
         choice_list = tuple(str(choice).strip().lower() for choice in state.get_choice_list())
         signature = (
@@ -714,5 +784,5 @@ class BattleSubagent:
 
     @staticmethod
     def _is_choose_only_batch(commands: list[str]) -> bool:
-        normalized = [str(command).strip() for command in commands if str(command).strip()]
-        return bool(normalized) and all(command.startswith("choose ") for command in normalized)
+        normalized = [str(c).strip() for c in commands if str(c).strip()]
+        return bool(normalized) and all(c.startswith("choose ") for c in normalized)

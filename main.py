@@ -17,7 +17,7 @@ from rs.utils.llm_utils import run_llm_preflight_check
 # If there are run seeds, it will run them. Otherwise, it will use the run amount.
 run_seeds = [
     # 'LGZ12EEMFGUK',
-    "114514"
+    # "114514"
 ]
 
 DEFAULT_RUN_AMOUNT = 50
@@ -125,16 +125,30 @@ if __name__ == "__main__":
         if selected_seeds:
             for idx in range(selected_run_amount):
                 for seed in selected_seeds:
-                    log(f"Running game {idx+1}/{selected_run_amount} with seed {seed}")
-                    game.start(seed)
-                    game.run()
-                    time.sleep(1)
+                    try:
+                        log(f"Running game {idx+1}/{selected_run_amount} with seed {seed}")
+                        game.start(seed)
+                        game.run()
+                        time.sleep(1)
+                    except Exception as e:
+                        if "Error code: 502" in str(e):
+                            log(f"502 error in game {idx+1} with seed {seed}, skipping rest of runs")
+                            break
+                        log(f"Exception in game {idx+1} with seed {seed}: " + str(e))
+                        log(traceback.format_exc())
         else:
             for idx in range(selected_run_amount):
-                log(f"Running game {idx+1}/{selected_run_amount} with random seed")
-                game.start(make_random_seed())
-                game.run()
-                time.sleep(1)
+                try:
+                    log(f"Running game {idx+1}/{selected_run_amount} with random seed")
+                    game.start(make_random_seed())
+                    game.run()
+                    time.sleep(1)
+                except Exception as e:
+                    if "Error code: 502" in str(e):
+                        log(f"502 error in game {idx+1} with seed {seed}, skipping rest of runs")
+                        break
+                    log(f"Exception in game {idx+1} with random seed: " + str(e))
+                    log(traceback.format_exc())
 
     except Exception as e:
         log("Exception! " + str(e))

@@ -1,15 +1,11 @@
 import copy
 import unittest
+from unittest.mock import patch
+
+from langchain_core.messages import AIMessage
 
 from rs.llm.battle_subagent import BattleSubagent, BattleSubagentConfig
-from rs.llm.battle_tools import (
-    AnalyzeWithCalculatorTool,
-    EnumerateLegalActionsTool,
-    ExecuteBattleCommandTool,
-    RetrieveBattleExperienceTool,
-    ValidateBattleCommandTool,
-)
-from rs.llm.providers.battle_llm_provider import BattleDirective
+from rs.llm.langmem_service import _patch_bind_tools_method
 from rs.machine.state import GameState
 from test_helpers.resources import load_resource_state
 
@@ -52,42 +48,77 @@ class FakeBattleRuntime:
         return self._current_state
 
 
-class ScriptedBattleProvider:
-    def __init__(self, directives):
-        self._directives = list(directives)
-        self.session_ids = []
-        self.validation_feedbacks = []
+class ScriptedChatModel:
+    """Mock ChatModel that returns pre-scripted AIMessage responses."""
 
-    def propose(self, context, working_memory, tool_descriptions, validation_feedback=None):
-        self.session_ids.append(context.extras["battle_working_memory"]["session_id"])
-        self.validation_feedbacks.append(dict(validation_feedback or {}))
-        if not self._directives:
-            return BattleDirective(mode="action", explanation="default_end", confidence=0.5, commands=["end"])
-        return self._directives.pop(0)
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.invoke_calls = []
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages):
+        self.invoke_calls.append(list(messages))
+        if not self._responses:
+            return _submit(["end"])
+        return self._responses.pop(0)
 
 
-def build_battle_subagent(provider, langmem_service):
-    subagent = BattleSubagent(
-        provider=provider,
+class PatchedScriptedChatModel(ScriptedChatModel):
+    pass
+
+
+_patch_bind_tools_method(PatchedScriptedChatModel)
+
+
+def _tc(name, args=None, tc_id=None):
+    return {"name": name, "args": args or {}, "id": tc_id or f"tc_{name}", "type": "tool_call"}
+
+
+def _submit(commands, content="", tc_id=None):
+    return AIMessage(
+        content=content,
+        tool_calls=[_tc("submit_battle_commands", {"commands": commands}, tc_id=tc_id or "tc_submit")],
+    )
+
+
+def _tool_call(tool_name, args=None, content="", tc_id=None):
+    return AIMessage(
+        content=content,
+        tool_calls=[_tc(tool_name, args or {}, tc_id=tc_id or f"tc_{tool_name}")],
+    )
+
+
+def _markup_tool_call(name, args=None):
+    return AIMessage(
+        content=(
+            "<tool_call>"
+            + str({
+                "name": name,
+                "arguments": args or {},
+            }).replace("'", '"')
+            + "</tool_call>"
+        )
+    )
+
+
+def build_battle_subagent(chat_model, langmem_service):
+    return BattleSubagent(
+        chat_model=chat_model,
         langmem_service=langmem_service,
         config=BattleSubagentConfig(max_decision_loops=16, max_tool_calls=16, fallback_max_path_count=100),
     )
-    subagent.register_tool(EnumerateLegalActionsTool())
-    subagent.register_tool(AnalyzeWithCalculatorTool())
-    subagent.register_tool(ValidateBattleCommandTool())
-    subagent.register_tool(ExecuteBattleCommandTool())
-    subagent.register_tool(RetrieveBattleExperienceTool(langmem_service))
-    return subagent
 
 
 class TestBattleSubagent(unittest.TestCase):
     def test_subagent_can_use_tool_then_commit_action_until_battle_ends(self):
-        langmem_service = FakeLangMemService()
-        provider = ScriptedBattleProvider([
-            BattleDirective(mode="tool", explanation="list legal actions", confidence=0.7, tool_name="enumerate_legal_actions"),
-            BattleDirective(mode="action", explanation="end turn", confidence=0.8, commands=["end"]),
+        langmem = FakeLangMemService()
+        model = ScriptedChatModel([
+            _tool_call("enumerate_legal_actions"),
+            _submit(["end"]),
         ])
-        subagent = build_battle_subagent(provider, langmem_service)
+        subagent = build_battle_subagent(model, langmem)
         initial_state = load_resource_state("battles/general/battle_simple_state.json")
         final_state = load_resource_state("/card_reward/card_reward_take.json")
         runtime = FakeBattleRuntime(initial_state, [final_state])
@@ -97,21 +128,18 @@ class TestBattleSubagent(unittest.TestCase):
         self.assertTrue(result.handled)
         self.assertEqual("CARD_REWARD", result.final_state.screen_type())
         self.assertEqual([["end"]], runtime.command_batches)
-        self.assertEqual(1, len(langmem_service.recorded))
-        self.assertEqual(1, len(langmem_service.custom_memories))
+        self.assertEqual(1, len(langmem.recorded))
+        self.assertEqual(1, len(langmem.custom_memories))
+        custom_context, custom_content, custom_tags, custom_reflect = langmem.custom_memories[0]
+        self.assertEqual("BattleHandler", custom_context.handler_name)
+        self.assertTrue(custom_content.startswith("Battle session ended on floor"))
+        self.assertEqual(("battle_summary", "BattleHandler"), custom_tags)
+        self.assertTrue(custom_reflect)
 
-    def test_subagent_can_execute_directly_via_execute_tool(self):
-        langmem_service = FakeLangMemService()
-        provider = ScriptedBattleProvider([
-            BattleDirective(
-                mode="tool",
-                explanation="execute immediately",
-                confidence=0.9,
-                tool_name="execute_battle_command",
-                tool_payload={"commands": ["end"]},
-            ),
-        ])
-        subagent = build_battle_subagent(provider, langmem_service)
+    def test_subagent_can_submit_commands_directly(self):
+        langmem = FakeLangMemService()
+        model = ScriptedChatModel([_submit(["end"])])
+        subagent = build_battle_subagent(model, langmem)
         initial_state = load_resource_state("battles/general/battle_simple_state.json")
         final_state = load_resource_state("/card_reward/card_reward_take.json")
         runtime = FakeBattleRuntime(initial_state, [final_state])
@@ -120,40 +148,76 @@ class TestBattleSubagent(unittest.TestCase):
 
         self.assertTrue(result.handled)
         self.assertEqual([["end"]], runtime.command_batches)
-        self.assertEqual(1, len(langmem_service.recorded))
+        self.assertEqual(1, len(langmem.recorded))
+
+    def test_subagent_repairs_markup_tool_calls_before_validation(self):
+        langmem = FakeLangMemService()
+        model = PatchedScriptedChatModel([_markup_tool_call("submit_battle_commands", {"commands": ["end"]})])
+        subagent = build_battle_subagent(model, langmem)
+        initial_state = load_resource_state("battles/general/battle_simple_state.json")
+        final_state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeBattleRuntime(initial_state, [final_state])
+
+        with patch("rs.llm.battle_subagent.log_to_run") as log_mock:
+            result = subagent.run(initial_state, runtime)
+
+        self.assertTrue(result.handled)
+        self.assertEqual([["end"]], runtime.command_batches)
+        messages = [call.args[0] for call in log_mock.call_args_list]
+        self.assertTrue(any("tool_calls=['submit_battle_commands']" in message for message in messages))
+        self.assertFalse(any("validation produced no commands" in message for message in messages))
+
+    def test_subagent_logs_per_step_decision_flow(self):
+        langmem = FakeLangMemService()
+        model = ScriptedChatModel([_submit(["end"], content="End the turn after reviewing the hand.")])
+        subagent = build_battle_subagent(model, langmem)
+        initial_state = load_resource_state("battles/general/battle_simple_state.json")
+        final_state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeBattleRuntime(initial_state, [final_state])
+
+        with patch("rs.llm.battle_subagent.log_to_run") as log_mock:
+            result = subagent.run(initial_state, runtime)
+
+        self.assertTrue(result.handled)
+        messages = [call.args[0] for call in log_mock.call_args_list]
+        self.assertTrue(any("BattleSubagent memory loaded:" in message for message in messages))
+        self.assertTrue(any("BattleSubagent state ingest:" in message for message in messages))
+        self.assertTrue(any("BattleSubagent model response:" in message for message in messages))
+        self.assertTrue(any("BattleSubagent accepted submission:" in message for message in messages))
+        self.assertTrue(any("BattleSubagent executing commands:" in message for message in messages))
+        self.assertTrue(any("BattleSubagent post-execution state:" in message for message in messages))
 
     def test_session_id_is_stable_within_battle_and_rotates_between_battles(self):
-        langmem_service = FakeLangMemService()
-        provider = ScriptedBattleProvider([
-            BattleDirective(mode="tool", explanation="inspect state", confidence=0.6, tool_name="enumerate_legal_actions"),
-            BattleDirective(mode="action", explanation="end first battle", confidence=0.8, commands=["end"]),
-            BattleDirective(mode="tool", explanation="inspect second state", confidence=0.6, tool_name="enumerate_legal_actions"),
-            BattleDirective(mode="action", explanation="end second battle", confidence=0.8, commands=["end"]),
-        ])
-        subagent = build_battle_subagent(provider, langmem_service)
+        langmem = FakeLangMemService()
         battle_state = load_resource_state("battles/general/battle_simple_state.json")
         reward_state = load_resource_state("/card_reward/card_reward_take.json")
+
+        model = ScriptedChatModel([
+            _tool_call("enumerate_legal_actions"),
+            _submit(["end"], tc_id="tc_first"),
+            _tool_call("enumerate_legal_actions"),
+            _submit(["end"], tc_id="tc_second"),
+        ])
+        subagent = build_battle_subagent(model, langmem)
 
         first_runtime = FakeBattleRuntime(battle_state, [reward_state])
         second_runtime = FakeBattleRuntime(battle_state, [reward_state])
 
-        subagent.run(battle_state, first_runtime)
-        subagent.run(battle_state, second_runtime)
+        result1 = subagent.run(battle_state, first_runtime)
+        result2 = subagent.run(battle_state, second_runtime)
 
-        first_session_ids = provider.session_ids[:2]
-        second_session_ids = provider.session_ids[2:4]
-        self.assertEqual(1, len(set(first_session_ids)))
-        self.assertEqual(1, len(set(second_session_ids)))
-        self.assertNotEqual(first_session_ids[0], second_session_ids[0])
+        self.assertNotEqual("", result1.session_id)
+        self.assertNotEqual("", result2.session_id)
+        self.assertNotEqual(result1.session_id, result2.session_id)
 
     def test_subagent_can_use_multiple_tools_before_action(self):
-        langmem_service = FakeLangMemService()
-        provider = ScriptedBattleProvider([
-            BattleDirective(mode="tool", explanation="refresh memories", confidence=0.7, tool_name="retrieve_battle_experience"),
-            BattleDirective(mode="tool", explanation="legacy analysis", confidence=0.7, tool_name="analyze_with_calculator"),
-            BattleDirective(mode="action", explanation="end after tools", confidence=0.8, commands=["end"]),
+        langmem = FakeLangMemService()
+        model = ScriptedChatModel([
+            _tool_call("retrieve_battle_experience"),
+            _tool_call("analyze_with_calculator"),
+            _submit(["end"]),
         ])
-        subagent = build_battle_subagent(provider, langmem_service)
+        subagent = build_battle_subagent(model, langmem)
         initial_state = load_resource_state("battles/general/battle_simple_state.json")
         final_state = load_resource_state("/card_reward/card_reward_take.json")
         runtime = FakeBattleRuntime(initial_state, [final_state])
@@ -161,17 +225,17 @@ class TestBattleSubagent(unittest.TestCase):
         result = subagent.run(initial_state, runtime)
 
         self.assertTrue(result.handled)
-        self.assertEqual(1, len(langmem_service.recorded))
-        self.assertIn("retrieve_battle_experience", langmem_service.recorded[0][1].required_tools_used)
-        self.assertIn("analyze_with_calculator", langmem_service.recorded[0][1].required_tools_used)
+        self.assertEqual(1, len(langmem.recorded))
+        self.assertIn("retrieve_battle_experience", langmem.recorded[0][1].required_tools_used)
+        self.assertIn("analyze_with_calculator", langmem.recorded[0][1].required_tools_used)
 
     def test_subagent_integration_can_run_multiple_battle_steps_before_exit(self):
-        langmem_service = FakeLangMemService()
-        provider = ScriptedBattleProvider([
-            BattleDirective(mode="action", explanation="play opening strike", confidence=0.9, commands=["play 1 0"]),
-            BattleDirective(mode="action", explanation="end the turn", confidence=0.8, commands=["end"]),
+        langmem = FakeLangMemService()
+        model = ScriptedChatModel([
+            _submit(["play 1 0"]),
+            _submit(["end"]),
         ])
-        subagent = build_battle_subagent(provider, langmem_service)
+        subagent = build_battle_subagent(model, langmem)
         initial_state = load_resource_state("battles/general/battle_simple_state.json")
         mid_state = load_resource_state("battles/general/another_simple.json")
         final_state = load_resource_state("/card_reward/card_reward_take.json")
@@ -184,13 +248,13 @@ class TestBattleSubagent(unittest.TestCase):
         self.assertEqual(2, result.steps)
         self.assertEqual("CARD_REWARD", result.final_state.screen_type())
 
-    def test_subagent_refines_invalid_choose_action_to_valid_indexed_action(self):
-        langmem_service = FakeLangMemService()
-        provider = ScriptedBattleProvider([
-            BattleDirective(mode="action", explanation="bad choose", confidence=0.7, commands=["choose rest"]),
-            BattleDirective(mode="action", explanation="fixed", confidence=0.8, commands=["end"]),
+    def test_subagent_refines_invalid_submission_via_corrective_message(self):
+        langmem = FakeLangMemService()
+        model = ScriptedChatModel([
+            _submit(["choose rest"]),   # invalid — corrective message injected
+            _submit(["end"]),           # valid on retry
         ])
-        subagent = build_battle_subagent(provider, langmem_service)
+        subagent = build_battle_subagent(model, langmem)
         initial_state = load_resource_state("battles/general/battle_simple_state.json")
         final_state = load_resource_state("/card_reward/card_reward_take.json")
         runtime = FakeBattleRuntime(initial_state, [final_state])
@@ -199,16 +263,21 @@ class TestBattleSubagent(unittest.TestCase):
 
         self.assertTrue(result.handled)
         self.assertEqual([["end"]], runtime.command_batches)
-        self.assertEqual("choose_requires_index", provider.validation_feedbacks[1].get("code"))
+        # Second invoke call must include the corrective HumanMessage
+        self.assertGreaterEqual(len(model.invoke_calls), 2)
+        second_call_messages = model.invoke_calls[1]
+        self.assertTrue(
+            any("validation_error" in str(m.content) for m in second_call_messages),
+            "Expected corrective validation_error message in second invoke",
+        )
 
-    def test_subagent_stops_after_validation_retry_limit(self):
-        langmem_service = FakeLangMemService()
-        provider = ScriptedBattleProvider([
-            BattleDirective(mode="action", explanation="bad choose", confidence=0.7, commands=["choose rest"]),
-            BattleDirective(mode="action", explanation="bad choose again", confidence=0.7, commands=["choose rest"]),
-            BattleDirective(mode="action", explanation="should not run", confidence=0.8, commands=["end"]),
+    def test_subagent_uses_guardrail_after_validation_retry_limit(self):
+        langmem = FakeLangMemService()
+        model = ScriptedChatModel([
+            _submit(["choose rest"]),   # invalid attempt 1
+            _submit(["choose rest"]),   # invalid attempt 2 — exhausted, guardrail fires
         ])
-        subagent = build_battle_subagent(provider, langmem_service)
+        subagent = build_battle_subagent(model, langmem)
         initial_state = load_resource_state("battles/general/battle_simple_state.json")
         final_state = load_resource_state("/card_reward/card_reward_take.json")
         runtime = FakeBattleRuntime(initial_state, [final_state])
@@ -217,16 +286,16 @@ class TestBattleSubagent(unittest.TestCase):
 
         self.assertTrue(result.handled)
         self.assertEqual(1, len(runtime.command_batches))
-        self.assertEqual(2, len(provider.validation_feedbacks))
+        self.assertEqual(2, len(model.invoke_calls))
 
     def test_subagent_breaks_repeated_choose_loop_with_progression_fallback(self):
-        langmem_service = FakeLangMemService()
-        provider = ScriptedBattleProvider([
-            BattleDirective(mode="action", explanation="choose card", confidence=0.8, commands=["choose 1"]),
-            BattleDirective(mode="action", explanation="choose card again", confidence=0.8, commands=["choose 1"]),
-            BattleDirective(mode="action", explanation="should be bypassed", confidence=0.8, commands=["choose 1"]),
+        langmem = FakeLangMemService()
+        model = ScriptedChatModel([
+            _submit(["choose 1"]),
+            _submit(["choose 1"]),
+            _submit(["choose 1"]),   # should be bypassed by no-progress guardrail
         ])
-        subagent = build_battle_subagent(provider, langmem_service)
+        subagent = build_battle_subagent(model, langmem)
 
         stalled_source = load_resource_state("battles/general/discard.json")
         stalled_payload = copy.deepcopy(stalled_source.json)

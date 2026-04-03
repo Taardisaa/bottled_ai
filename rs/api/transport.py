@@ -14,10 +14,13 @@ from rs.helper.logger import log, log_to_run
 
 COMMUNICATIONMOD_TRANSPORT_ENV = "COMMUNICATIONMOD_TRANSPORT"
 _EXCHANGE_LOG_PATH = Path(ROOT_DIR) / "logs" / "game_state_exchange.jsonl"
+_MAX_EXCHANGE_LOG_SIZE = 2_000_000_000  # 2 GB
 
 
 def _append_exchange_jsonl(direction: str, message: str) -> None:
     _EXCHANGE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if _EXCHANGE_LOG_PATH.exists() and _EXCHANGE_LOG_PATH.stat().st_size >= _MAX_EXCHANGE_LOG_SIZE:
+        return
     try:
         payload = _json.loads(message)
     except (ValueError, TypeError):
