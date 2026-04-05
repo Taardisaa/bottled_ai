@@ -316,8 +316,17 @@ class CampfireSubagent:
     def _session_finalize_node(self, state: CampfireSubagentState) -> dict[str, Any]:
         runtime = state["runtime"]
         final_state = runtime.current_state()
-        final_summary = self._build_final_summary(final_state, dict(state.get("working_memory", {})))
+        working_memory = dict(state.get("working_memory", {}))
+        final_summary = self._build_final_summary(final_state, working_memory)
         log_to_run(f"CampfireHandler subagent session ended: {state.get('session_id', '')}")
+        if final_summary.strip():
+            final_context = self._augment_context(state["current_context"], working_memory)
+            self._langmem_service.record_custom_memory(
+                final_context,
+                final_summary,
+                tags=("campfire_summary", "CampfireHandler"),
+                reflect=True,
+            )
         handled = bool(state.get("handled", False))
         if self.is_in_scope(final_state) and not state.get("executed_commands"):
             handled = False
@@ -362,12 +371,20 @@ class CampfireSubagent:
     def _build_final_summary(self, final_state: GameState, working_memory: dict[str, Any]) -> str:
         game_state = final_state.game_state()
         floor = game_state.get("floor", "unknown")
-        room_type = game_state.get("room_type", "unknown")
+        current_hp = game_state.get("current_hp", "unknown")
+        max_hp = game_state.get("max_hp", "unknown")
+        batches = working_memory.get("executed_command_batches", [])
+        commands_str = ", ".join(
+            "[" + " | ".join(batch) + "]" for batch in batches
+        ) or "none"
         recent_steps = " | ".join(working_memory.get("recent_step_summaries", [])[-4:])
         return (
-            f"CampfireHandler session ended on floor {floor} with room_type={room_type}. "
-            f"Executed {len(working_memory.get('executed_command_batches', []))} command batches. "
-            f"Recent campfire notes: {recent_steps or 'none'}"
+            f"Floor {floor} REST SITE. Player HP after: {current_hp}/{max_hp}.\n"
+            f"Commands: {commands_str}\n"
+            f"Step notes: {recent_steps or 'none'}\n"
+            f"Review: Was REST vs SMITH (upgrade) the right tradeoff at this HP level? "
+            f"Which card would benefit most from upgrading given the current deck? "
+            f"What would improve the outcome of the next battle?"
         )
 
     def is_in_scope(self, state: GameState) -> bool:

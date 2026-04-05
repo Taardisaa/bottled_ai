@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import time
 from typing import Optional, Any, Union, Tuple, List
 
 from collections.abc import Sequence
@@ -1132,6 +1133,7 @@ def ask_llm_once(message: str,
             if cached_response is not None:
                 return cached_response, 0  # Cached responses don't cost tokens
 
+        _t0_llm = time.perf_counter()
         if use_two_layer_struct_convert and struct is not None:
             response_to_return, total_tokens = _ask_llm_once_two_layer(
                 message=message,
@@ -1155,6 +1157,8 @@ def ask_llm_once(message: str,
                 **completion_kwargs,
             )
             response_to_return, total_tokens = _parse_litellm_response(raw_response, struct)
+        _llm_elapsed_ms = (time.perf_counter() - _t0_llm) * 1000
+        logger.info(f"[TIMING] ask_llm_once model={model} ns={cache_namespace} took {_llm_elapsed_ms:.0f}ms tokens={total_tokens}")
         logger.info(f"LLM tokens used: {total_tokens}.")
         if response_to_return is None:
             logger.error("Unexpected LiteLLM response type or failed structured parse")

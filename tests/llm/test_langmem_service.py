@@ -526,5 +526,419 @@ class TestLangMemService(unittest.TestCase):
 
             self.assertIn("LangMem initialization failed", str(raised.exception))
 
+    def test_record_accepted_decision_skips_when_confidence_below_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = LangMemRepository(str(Path(tmp) / "memory.sqlite3"))
+            service = LangMemService(
+                config=LlmConfig(
+                    enabled=True,
+                    langmem_enabled=True,
+                    langmem_sqlite_path=str(Path(tmp) / "memory.sqlite3"),
+                    langmem_min_record_confidence=0.4,
+                ),
+                repository=repo,
+                embeddings_client=FakeEmbeddings(),
+                reflection_manager_factory=lambda namespace, store: FakeReflectionManager(namespace, store),
+            )
+            context = AgentContext(
+                handler_name="BattleHandler",
+                screen_type="BATTLE",
+                available_commands=["choose"],
+                choice_list=[],
+                game_state={"floor": 3, "act": 1, "character_class": "IRONCLAD"},
+                extras={"run_id": "ironclad:seed1", "agent_identity": "neo_primates"},
+            )
+
+            service.record_accepted_decision(
+                context,
+                AgentDecision(proposed_command="play 1", confidence=0.25, explanation="guardrail forced"),
+            )
+            service.shutdown(wait=True)
+
+            records = repo.load_all()
+            self.assertEqual(0, len(records), "low-confidence decision should not be recorded")
+
+    def test_record_accepted_decision_writes_when_confidence_meets_threshold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = LangMemRepository(str(Path(tmp) / "memory.sqlite3"))
+            service = LangMemService(
+                config=LlmConfig(
+                    enabled=True,
+                    langmem_enabled=True,
+                    langmem_sqlite_path=str(Path(tmp) / "memory.sqlite3"),
+                    langmem_min_record_confidence=0.4,
+                ),
+                repository=repo,
+                embeddings_client=FakeEmbeddings(),
+                reflection_manager_factory=lambda namespace, store: FakeReflectionManager(namespace, store),
+            )
+            context = AgentContext(
+                handler_name="EventHandler",
+                screen_type="EVENT",
+                available_commands=["choose"],
+                choice_list=["a"],
+                game_state={"floor": 5, "act": 1, "character_class": "IRONCLAD"},
+                extras={"run_id": "ironclad:seed1", "agent_identity": "neo_primates"},
+            )
+
+            service.record_accepted_decision(
+                context,
+                AgentDecision(proposed_command="choose 0", confidence=0.9, explanation="safe choice"),
+            )
+            service.shutdown(wait=True)
+
+            records = repo.load_all()
+            episodic = [r for r in records if r.memory_type == "episodic"]
+            self.assertEqual(1, len(episodic))
+            self.assertIn("choose 0", episodic[0].content)
+
+    def test_battle_handler_episodic_record_includes_combat_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = LangMemRepository(str(Path(tmp) / "memory.sqlite3"))
+            service = LangMemService(
+                config=LlmConfig(
+                    enabled=True,
+                    langmem_enabled=True,
+                    langmem_sqlite_path=str(Path(tmp) / "memory.sqlite3"),
+                    langmem_min_record_confidence=0.0,
+                ),
+                repository=repo,
+                embeddings_client=FakeEmbeddings(),
+                reflection_manager_factory=lambda namespace, store: FakeReflectionManager(namespace, store),
+            )
+            context = AgentContext(
+                handler_name="BattleHandler",
+                screen_type="BATTLE",
+                available_commands=["play 1 0"],
+                choice_list=[],
+                game_state={
+                    "floor": 7, "act": 1, "character_class": "IRONCLAD",
+                    "room_type": "ELITE", "turn": 3,
+                    "current_hp": 45, "max_hp": 80,
+                },
+                extras={
+                    "run_id": "ironclad:seed1",
+                    "agent_identity": "neo_primates",
+                    "player_energy": 2,
+                    "monster_summaries": [
+                        {"name": "Gremlin Nob", "current_hp": 82, "max_hp": 100, "intent": "Attack 14"}
+                    ],
+                },
+            )
+
+            service.record_accepted_decision(
+                context,
+                AgentDecision(proposed_command="play 1 0 | end", confidence=0.85, explanation="attack the nob"),
+            )
+            service.shutdown(wait=True)
+
+            records = repo.load_all()
+            episodic = [r for r in records if r.memory_type == "episodic"]
+            self.assertEqual(1, len(episodic))
+            content = episodic[0].content
+            self.assertIn("ELITE", content)
+            self.assertIn("T3", content)
+            self.assertIn("45/80", content)
+            self.assertIn("E2", content)
+            self.assertIn("Gremlin Nob", content)
+            self.assertIn("Attack 14", content)
+
+    def test_finalization_summary_includes_victory_outcome(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = LangMemService(
+                config=LlmConfig(
+                    enabled=True,
+                    langmem_enabled=True,
+                    langmem_sqlite_path=str(Path(tmp) / "memory.sqlite3"),
+                    langmem_reflection_batch_size=1,
+                ),
+                embeddings_client=FakeEmbeddings(),
+                reflection_manager_factory=lambda namespace, store: FakeReflectionManager(namespace, store),
+            )
+            summary_won = service._build_run_finalization_summary(
+                {"floor": 16, "score": 200, "victory": True, "bosses": [], "elites": []}
+            )
+            summary_died = service._build_run_finalization_summary(
+                {"floor": 9, "score": 50, "victory": False, "bosses": [], "elites": []}
+            )
+            summary_unknown = service._build_run_finalization_summary(
+                {"floor": 5, "score": 20, "bosses": [], "elites": []}
+            )
+            service.shutdown(wait=True)
+
+            self.assertIn("won", summary_won)
+            self.assertIn("died", summary_died)
+            self.assertIn("ended", summary_unknown)
+
+    def test_format_search_results_returns_all_top_k_items(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = LangMemService(
+                config=LlmConfig(
+                    enabled=True,
+                    langmem_enabled=True,
+                    langmem_sqlite_path=str(Path(tmp) / "memory.sqlite3"),
+                    langmem_top_k=5,
+                    langmem_min_record_confidence=0.0,
+                ),
+                embeddings_client=FakeEmbeddings(),
+                reflection_manager_factory=lambda namespace, store: FakeReflectionManager(namespace, store),
+            )
+            context = AgentContext(
+                handler_name="EventHandler",
+                screen_type="EVENT",
+                available_commands=["choose"],
+                choice_list=["a"],
+                game_state={"floor": 1, "act": 1, "character_class": "IRONCLAD"},
+                extras={"run_id": "ironclad:seed1", "agent_identity": "neo_primates"},
+            )
+            for i in range(5):
+                service.record_accepted_decision(
+                    context,
+                    AgentDecision(
+                        proposed_command=f"choose {i}",
+                        confidence=0.9,
+                        explanation=f"reason {i}",
+                    ),
+                )
+
+            result = service.build_context_memory(context)
+            service.shutdown(wait=True)
+
+            # With top_k=5 and no [:3] cap, all 5 should be formatted (one [EP| tag per entry)
+            ep = result["retrieved_episodic_memories"]
+            self.assertNotEqual("none", ep)
+            self.assertEqual(5, ep.count("[EP|"))
+
+    def test_finalize_run_submits_retrospective_reflection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_path = Path(tmp) / "memory.sqlite3"
+            repo = LangMemRepository(str(repo_path))
+            captured_namespaces = []
+
+            class CapturingReflectionManager:
+                def __init__(self, namespace, store):
+                    self.namespace = namespace
+                    captured_namespaces.append(namespace)
+
+                def invoke(self, payload):
+                    return [{
+                        "namespace": self.namespace,
+                        "key": f"mem-{len(captured_namespaces)}",
+                        "value": {
+                            "kind": "Memory",
+                            "content": {"content": "Deck lacked block cards."},
+                        },
+                    }]
+
+            service = LangMemService(
+                config=LlmConfig(
+                    enabled=True,
+                    langmem_enabled=True,
+                    langmem_sqlite_path=str(repo_path),
+                    langmem_reflection_batch_size=100,
+                    langmem_min_record_confidence=0.0,
+                ),
+                repository=repo,
+                embeddings_client=FakeEmbeddings(),
+                reflection_manager_factory=lambda namespace, store: CapturingReflectionManager(namespace, store),
+            )
+            context = AgentContext(
+                handler_name="BattleHandler",
+                screen_type="BATTLE",
+                available_commands=["play 1"],
+                choice_list=[],
+                game_state={"floor": 9, "act": 1, "character_class": "IRONCLAD"},
+                extras={"run_id": "ironclad:seed1", "agent_identity": "neo_primates"},
+            )
+            # Write one episodic record so retrospective has something to sample
+            service.record_accepted_decision(
+                context,
+                AgentDecision(proposed_command="play 1 0 | end", confidence=0.8, explanation="attack"),
+            )
+
+            service.finalize_run(
+                context,
+                {"floor": 9, "score": 80, "victory": False, "bosses": [], "elites": ["Gremlin Nob"]},
+            )
+            service.shutdown(wait=True)
+
+            records = repo.load_all()
+            semantic_records = [r for r in records if r.memory_type == "semantic"]
+            retrospective_records = [r for r in semantic_records if r.namespace[0] == "retrospective"]
+            self.assertGreater(len(retrospective_records), 0, "expected at least one retrospective memory")
+            self.assertEqual(
+                ("retrospective", "neo_primates", "ironclad"),
+                retrospective_records[0].namespace,
+            )
+
+    def test_build_context_memory_includes_retrospective_in_semantic_string(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_path = Path(tmp) / "memory.sqlite3"
+            repo = LangMemRepository(str(repo_path))
+            service = LangMemService(
+                config=LlmConfig(
+                    enabled=True,
+                    langmem_enabled=True,
+                    langmem_sqlite_path=str(repo_path),
+                    langmem_top_k=3,
+                ),
+                repository=repo,
+                embeddings_client=FakeEmbeddings(),
+                reflection_manager_factory=lambda namespace, store: FakeReflectionManager(namespace, store),
+            )
+            context = AgentContext(
+                handler_name="BattleHandler",
+                screen_type="BATTLE",
+                available_commands=["play 1"],
+                choice_list=[],
+                game_state={"floor": 5, "act": 1, "character_class": "IRONCLAD"},
+                extras={"run_id": "ironclad:seed1", "agent_identity": "neo_primates"},
+            )
+            # Write a retrospective memory directly into the retrospective namespace
+            retro_namespace = ("retrospective", "neo_primates", "ironclad")
+            import uuid as _uuid
+            from rs.llm.langmem_service import MemoryRecord, _utc_now
+            now = _utc_now()
+            record = MemoryRecord(
+                memory_id=_uuid.uuid4().hex,
+                namespace=retro_namespace,
+                memory_type="semantic",
+                content="Prioritize block cards in Act 1 to survive elites.",
+                source_run_id="ironclad:seed1",
+                handler_name="BattleHandler",
+                created_at_utc=now,
+                updated_at_utc=now,
+                tags=("semantic", "run_retrospective", "BattleHandler"),
+            )
+            repo.upsert(record)
+            with service._lock:
+                service._store.put(retro_namespace, record.memory_id, record.to_store_value(), index=["content"])
+
+            result = service.build_context_memory(context)
+            service.shutdown(wait=True)
+
+            self.assertIn("RETRO", result["retrieved_semantic_memories"])
+            self.assertIn("block cards", result["retrieved_semantic_memories"])
+
+
+    def test_reflection_batch_per_handler_prevents_namespace_misattribution(self):
+        # With per-handler buffers, a CombatRewardHandler decision reaching batch_size
+        # should only flush the CombatRewardHandler buffer, leaving BattleHandler content
+        # in its own separate buffer and NOT writing it to the wrong namespace.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_path = Path(tmp) / "memory.sqlite3"
+            repo = LangMemRepository(str(repo_path))
+            captured_namespaces: list[tuple] = []
+
+            class CapturingReflectionManager:
+                def __init__(self, namespace, store):
+                    self.namespace = namespace
+                    captured_namespaces.append(namespace)
+
+                def invoke(self, payload):
+                    return [{
+                        "namespace": self.namespace,
+                        "key": "mem-1",
+                        "value": {"kind": "Memory", "content": {"content": "test memory"}},
+                    }]
+
+            service = LangMemService(
+                config=LlmConfig(
+                    enabled=True,
+                    langmem_enabled=True,
+                    langmem_sqlite_path=str(repo_path),
+                    langmem_reflection_batch_size=2,
+                    langmem_min_record_confidence=0.0,
+                ),
+                repository=repo,
+                embeddings_client=FakeEmbeddings(),
+                reflection_manager_factory=lambda namespace, store: CapturingReflectionManager(namespace, store),
+            )
+
+            battle_ctx = AgentContext(
+                handler_name="BattleHandler",
+                screen_type="BATTLE",
+                available_commands=["play 1"],
+                choice_list=[],
+                game_state={"floor": 3, "act": 1, "character_class": "IRONCLAD",
+                            "room_type": "MonsterRoom", "turn": 1, "current_hp": 80, "max_hp": 80},
+                extras={"run_id": "ironclad:seed1", "agent_identity": "neo_primates",
+                        "player_energy": 3, "monster_summaries": []},
+            )
+            reward_ctx = AgentContext(
+                handler_name="CombatRewardHandler",
+                screen_type="COMBAT_REWARD",
+                available_commands=["choose 0"],
+                choice_list=[],
+                game_state={"floor": 3, "act": 1, "character_class": "IRONCLAD"},
+                extras={"run_id": "ironclad:seed1", "agent_identity": "neo_primates"},
+            )
+
+            # 1 battle decision in BattleHandler buffer (below threshold of 2)
+            service.record_accepted_decision(
+                battle_ctx,
+                AgentDecision(proposed_command="play 1 0 | end", confidence=0.8, explanation="attack"),
+            )
+            # 2 reward decisions — CombatRewardHandler buffer hits threshold → flush
+            service.record_accepted_decision(
+                reward_ctx,
+                AgentDecision(proposed_command="choose 0", confidence=0.9, explanation="take gold"),
+            )
+            service.record_accepted_decision(
+                reward_ctx,
+                AgentDecision(proposed_command="choose 1", confidence=0.9, explanation="take card"),
+            )
+            service.shutdown(wait=True)
+
+            # Only CombatRewardHandler namespace should have been used for mid-run reflection
+            flushed = [ns for ns in captured_namespaces if ns[0] == "semantic"]
+            self.assertTrue(
+                all(ns[-1] == "CombatRewardHandler" for ns in flushed),
+                f"Expected only CombatRewardHandler namespace, got: {flushed}",
+            )
+
+    def test_battle_episodic_record_strips_tool_call_xml_from_explanation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = LangMemRepository(str(Path(tmp) / "memory.sqlite3"))
+            service = LangMemService(
+                config=LlmConfig(
+                    enabled=True,
+                    langmem_enabled=True,
+                    langmem_sqlite_path=str(Path(tmp) / "memory.sqlite3"),
+                    langmem_min_record_confidence=0.0,
+                ),
+                repository=repo,
+                embeddings_client=FakeEmbeddings(),
+                reflection_manager_factory=lambda namespace, store: FakeReflectionManager(namespace, store),
+            )
+            context = AgentContext(
+                handler_name="BattleHandler",
+                screen_type="BATTLE",
+                available_commands=["play 1 0"],
+                choice_list=[],
+                game_state={"floor": 3, "act": 1, "character_class": "IRONCLAD",
+                            "room_type": "MonsterRoom", "turn": 2,
+                            "current_hp": 60, "max_hp": 80},
+                extras={"run_id": "ironclad:seed1", "agent_identity": "neo_primates",
+                        "player_energy": 2, "monster_summaries": []},
+            )
+            raw_tool_call = (
+                '<tool_call>\n{"name": "submit_battle_commands", '
+                '"arguments": {"commands": ["play 1 0"]}}\n</tool_call>'
+            )
+
+            service.record_accepted_decision(
+                context,
+                AgentDecision(proposed_command="play 1 0", confidence=0.8, explanation=raw_tool_call),
+            )
+            service.shutdown(wait=True)
+
+            records = repo.load_all()
+            episodic = [r for r in records if r.memory_type == "episodic"]
+            self.assertEqual(1, len(episodic))
+            self.assertNotIn("<tool_call>", episodic[0].content)
+            self.assertNotIn("submit_battle_commands", episodic[0].content)
+
+
 if __name__ == "__main__":
     unittest.main()

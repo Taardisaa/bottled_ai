@@ -35,6 +35,41 @@ MemoryManagerFactory = Callable[[tuple[str, ...], InMemoryStore], Any]
 _TOOL_CALL_BLOCK_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 _COMPAT_PATCH_MARKER = "_compatibility_tool_call_bind_tools_patched"
 
+_STS_EVENT_REFLECTION_INSTRUCTIONS = """You are extracting strategic lessons for a Slay the Spire AI agent.
+
+The input is a session summary from one in-game event (battle, campfire, or reward). Your job is to distill
+actionable strategic rules from it and store them for future reference.
+
+Rules for what to store:
+- Write only in plain game terms: card names, enemy names, floor ranges, HP values, room types (ELITE/BOSS/MONSTER).
+- Answer any "Review:" questions in the summary by forming a concrete strategic rule.
+- Generalise: "Against Lagavulin, prioritise blocking before turn 3" not "chose play 2 0 with confidence 0.80".
+- NEVER store: confidence scores, handler names, session IDs, guardrail names, or any internal system label.
+  Handler names are internal labels like BattleHandler, CombatRewardHandler, MapHandler, CardRewardHandler —
+  do NOT repeat them. If the input contains these labels, ignore them.
+  BAD: "BattleHandler chose play 2 0 with confidence 0.85" — never write this.
+  GOOD: "Against Gremlin Nob, prioritise block cards before taking high-damage hits."
+- Consolidate: if a rule already exists and this observation reinforces it, strengthen or refine the existing
+  memory rather than adding a duplicate.
+- If an action was clearly suboptimal (e.g. lost significant HP when blocking would have prevented it), record
+  what should be done differently under similar conditions."""
+
+_STS_RETROSPECTIVE_INSTRUCTIONS = """You are extracting high-level strategic lessons for a Slay the Spire AI agent
+by reviewing an entire completed run.
+
+The input is a run narrative: the outcome (won/died), the floor reached, enemies encountered, and a sample of key
+decisions made across the run. Your job is to identify what went wrong or right at a strategic level.
+
+Rules for what to store:
+- Write only in plain game terms: card names, enemy types, floor ranges, HP thresholds, relic names, act numbers.
+- Focus on run-arc patterns: deck composition mismatches, missed upgrade opportunities, poor path choices, resource
+  mismanagement across multiple floors.
+- Good examples: "Dying before act 2 is often caused by insufficient block cards — prioritise 1-2 block cards in
+  early combat rewards", "Skipping elite fights in act 1 preserves HP for the boss".
+- Never store: confidence scores, handler names, session IDs, command syntax details, or guardrail system labels.
+- Consolidate existing memories: if a pattern is already recorded, strengthen or update rather than duplicate.
+- Store what to do DIFFERENTLY next run, not just what happened."""
+
 
 def _wrap_bound_tool_runnable(bound: Any) -> Any:
     def _invoke(input_value: Any, config: Any = None) -> Any:
@@ -313,7 +348,7 @@ class LangMemService:
         self._store: InMemoryStore | None = None
         self._lock = RLock()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="langmem")
-        self._reflection_buffers: dict[str, list[str]] = defaultdict(list)
+        self._reflection_buffers: dict[tuple[str, str], list[str]] = defaultdict(list)
         self._status = "disabled_by_config"
         self._status_detail = ""
         self._initialize()
@@ -416,6 +451,7 @@ class LangMemService:
         return self._status
 
     def build_context_memory(self, context: AgentContext) -> dict[str, str]:
+        import time as _time
         if not self.is_ready():
             return {
                 "retrieved_episodic_memories": "none",
@@ -423,16 +459,30 @@ class LangMemService:
                 "langmem_status": self.status(),
             }
 
+        _t0 = _time.perf_counter()
         query = self._build_query_text(context)
         episodic_namespace = self._run_namespace(context)
         semantic_namespace = self._semantic_namespace(context)
+        retrospective_namespace = self._retrospective_namespace(context)
 
         with self._lock:
             episodic_items = self._store.search(episodic_namespace, query=query, limit=self._config.langmem_top_k)
             semantic_items = self._store.search(semantic_namespace, query=query, limit=self._config.langmem_top_k)
+            retrospective_items = self._store.search(
+                retrospective_namespace, query=query, limit=self._config.langmem_top_k
+            )
+        _elapsed_ms = (_time.perf_counter() - _t0) * 1000
+        log_to_run(f"[TIMING] LangMem.build_context_memory handler={context.handler_name} took {_elapsed_ms:.0f}ms")
 
         retrieved_episodic_memories = self._format_search_results(episodic_items, "EP")
-        retrieved_semantic_memories = self._format_search_results(semantic_items, "SEM")
+        semantic_str = self._format_search_results(semantic_items, "SEM")
+        retro_str = self._format_search_results(retrospective_items, "RETRO")
+        if retro_str != "none" and semantic_str != "none":
+            retrieved_semantic_memories = f"{semantic_str} | {retro_str}"
+        elif retro_str != "none":
+            retrieved_semantic_memories = retro_str
+        else:
+            retrieved_semantic_memories = semantic_str
         langmem_status = self.status()
         log_to_run(
             "LangMem retrieval | "
@@ -454,15 +504,18 @@ class LangMemService:
             return
         if decision.proposed_command is None or decision.fallback_recommended:
             return
+        if decision.confidence < self._config.langmem_min_record_confidence:
+            return
 
         record = self._build_episodic_record(context, decision)
         self._store_record(record)
 
         run_id = self._resolve_run_id(context)
-        self._reflection_buffers[run_id].append(record.content)
-        if len(self._reflection_buffers[run_id]) >= self._config.langmem_reflection_batch_size:
-            batch = list(self._reflection_buffers[run_id])
-            self._reflection_buffers[run_id].clear()
+        buf_key = (run_id, context.handler_name)
+        self._reflection_buffers[buf_key].append(record.content)
+        if len(self._reflection_buffers[buf_key]) >= self._config.langmem_reflection_batch_size:
+            batch = list(self._reflection_buffers[buf_key])
+            self._reflection_buffers[buf_key].clear()
             self._executor.submit(self._reflect_batch, context, batch, "decision_batch")
 
     def record_custom_memory(
@@ -502,13 +555,39 @@ class LangMemService:
             return
 
         run_id = self._resolve_run_id(context)
-        batch = list(self._reflection_buffers.get(run_id, []))
-        self._reflection_buffers[run_id].clear()
+        batch = []
+        for key in list(self._reflection_buffers):
+            if key[0] == run_id:
+                batch.extend(self._reflection_buffers[key])
+                self._reflection_buffers[key].clear()
         run_summary = self._build_run_finalization_summary(payload)
         if run_summary:
             batch.append(run_summary)
         if batch:
             self._executor.submit(self._reflect_batch, context, batch, "run_finalization")
+        self._executor.submit(self._submit_retrospective_reflection, context, payload)
+
+    def _submit_retrospective_reflection(self, context: AgentContext, payload: dict[str, Any]) -> None:
+        if not self.is_ready() or self._repository is None:
+            return
+        run_namespace = self._run_namespace(context)
+        episodic_records = self._repository.list_namespace(run_namespace, "episodic")
+        if not episodic_records:
+            return
+        # Sample: first 5 + last 20 to capture early decisions and run-end arc
+        sample = episodic_records[:5]
+        if len(episodic_records) > 5:
+            sample = sample + episodic_records[max(5, len(episodic_records) - 20):]
+        lines = [record.content for record in sample]
+        run_summary = self._build_run_finalization_summary(payload)
+        run_memory_summary = str(payload.get("run_memory_summary", "")).strip()
+        narrative_parts = [run_summary]
+        if run_memory_summary:
+            narrative_parts.append(f"Run summary: {run_memory_summary}")
+        narrative_parts.append("Key decisions this run:")
+        narrative_parts.extend(lines)
+        narrative = "\n".join(narrative_parts)
+        self._reflect_batch(context, [narrative], "run_retrospective")
 
     def shutdown(self, wait: bool = True) -> None:
         self._executor.shutdown(wait=wait)
@@ -530,10 +609,14 @@ class LangMemService:
         now = _utc_now()
         floor = context.game_state.get("floor", "?")
         act = context.game_state.get("act", "?")
-        content = (
-            f"A{act} F{floor} {context.handler_name} chose {decision.proposed_command} "
-            f"with confidence {decision.confidence:.2f} because {decision.explanation}."
-        )
+        if context.handler_name == "BattleHandler":
+            content = self._build_battle_episodic_content(context, decision, act, floor)
+        else:
+            reason = _TOOL_CALL_BLOCK_RE.sub("", decision.explanation).strip() or "agent_step"
+            content = (
+                f"A{act} F{floor} {context.screen_type} chose {decision.proposed_command} "
+                f"because {reason}."
+            )
         return MemoryRecord(
             memory_id=uuid.uuid4().hex,
             namespace=self._run_namespace(context),
@@ -546,11 +629,37 @@ class LangMemService:
             tags=("accepted_decision", context.handler_name),
         )
 
+    @staticmethod
+    def _build_battle_episodic_content(
+            context: AgentContext, decision: AgentDecision, act: Any, floor: Any
+    ) -> str:
+        room_type = context.game_state.get("room_type", "MONSTER")
+        turn = context.game_state.get("turn", "?")
+        current_hp = context.game_state.get("current_hp", "?")
+        max_hp = context.game_state.get("max_hp", "?")
+        energy = context.extras.get("player_energy", "?")
+        monsters = context.extras.get("monster_summaries", [])
+        if monsters:
+            m = monsters[0]
+            monster_desc = (
+                f"{m.get('name', 'enemy')} HP {m.get('current_hp', '?')}/{m.get('max_hp', '?')} "
+                f"intent={m.get('intent', '?')}"
+            )
+        else:
+            monster_desc = "no enemy"
+        reason = _TOOL_CALL_BLOCK_RE.sub("", decision.explanation).strip() or "battle_subagent_step"
+        return (
+            f"A{act} F{floor} {room_type} T{turn} | HP {current_hp}/{max_hp} E{energy} | "
+            f"{monster_desc} | chose {decision.proposed_command} because {reason}."
+        )
+
     def _reflect_batch(self, context: AgentContext, batch: list[str], trigger: str) -> None:
+        import time as _time
         if not batch or not self.is_ready():
             return
 
-        manager = self._build_reflection_manager(context)
+        _t0 = _time.perf_counter()
+        manager = self._build_reflection_manager(context, trigger=trigger)
         messages = [HumanMessage(content="\n".join(batch))]
         final_puts: list[dict[str, Any]] = []
         for _ in range(3):
@@ -561,6 +670,11 @@ class LangMemService:
                 continue
             if final_puts:
                 break
+        _elapsed_ms = (_time.perf_counter() - _t0) * 1000
+        log_to_run(
+            f"[TIMING] LangMem._reflect_batch trigger={trigger} handler={context.handler_name} "
+            f"took {_elapsed_ms:.0f}ms puts={len(final_puts)}"
+        )
         if not final_puts:
             return
 
@@ -590,11 +704,22 @@ class LangMemService:
                     self._repository.upsert(record)
                 if self._store is not None:
                     self._store.put(namespace, record.memory_id, semantic_value, index=["content"])
-            self._prune_semantic_namespace(namespace)
+            if trigger == "run_retrospective":
+                self._prune_retrospective_namespace(namespace)
+            else:
+                self._prune_semantic_namespace(namespace)
 
-    def _build_reflection_manager(self, context: AgentContext) -> Any:
+    def _build_reflection_manager(self, context: AgentContext, trigger: str = "") -> Any:
+        is_retrospective = trigger == "run_retrospective"
+        if is_retrospective:
+            namespace = self._retrospective_namespace(context)
+            instructions = _STS_RETROSPECTIVE_INSTRUCTIONS
+        else:
+            namespace = self._semantic_namespace(context)
+            instructions = _STS_EVENT_REFLECTION_INSTRUCTIONS
+
         if self._reflection_manager_factory is not None:
-            return self._reflection_manager_factory(self._semantic_namespace(context), self._store)
+            return self._reflection_manager_factory(namespace, self._store)
 
         chat_base_url = llm_runtime_config.llm_base_url or llm_runtime_config.openai_base_url or None
         chat_api_key = llm_runtime_config.llm_api_key or llm_runtime_config.openai_key or "langmem-reflection"
@@ -608,7 +733,8 @@ class LangMemService:
         return create_memory_store_manager(
             compatible_chat_model,
             store=self._store,
-            namespace=self._semantic_namespace(context),
+            namespace=namespace,
+            instructions=instructions,
             enable_deletes=False,
             query_model=compatible_chat_model,
             query_limit=self._config.langmem_top_k,
@@ -623,6 +749,15 @@ class LangMemService:
             if self._store is not None:
                 self._store.delete(namespace, record.memory_id)
 
+    def _prune_retrospective_namespace(self, namespace: tuple[str, ...]) -> None:
+        if self._repository is None:
+            return
+        retro_records = self._repository.list_namespace(namespace, "semantic")
+        for record in retro_records[self._config.langmem_max_retrospective_memories:]:
+            self._repository.delete(record.memory_id)
+            if self._store is not None:
+                self._store.delete(namespace, record.memory_id)
+
     def _run_namespace(self, context: AgentContext) -> tuple[str, ...]:
         agent_identity = self._resolve_agent_identity(context)
         character_class, seed = self._resolve_character_and_seed(context)
@@ -632,6 +767,11 @@ class LangMemService:
         agent_identity = self._resolve_agent_identity(context)
         character_class, _ = self._resolve_character_and_seed(context)
         return ("semantic", agent_identity, character_class, context.handler_name)
+
+    def _retrospective_namespace(self, context: AgentContext) -> tuple[str, ...]:
+        agent_identity = self._resolve_agent_identity(context)
+        character_class, _ = self._resolve_character_and_seed(context)
+        return ("retrospective", agent_identity, character_class)
 
     @staticmethod
     def _resolve_run_id(context: AgentContext) -> str:
@@ -669,7 +809,7 @@ class LangMemService:
             return "none"
 
         lines = []
-        for item in items[:3]:
+        for item in items:
             score = item.score if item.score is not None else 0.0
             content = _coerce_memory_content(item.value)
             handler_name = str(item.value.get("handler_name", item.namespace[-1] if item.namespace else "memory"))
@@ -682,8 +822,10 @@ class LangMemService:
         score = payload.get("score", "unknown")
         bosses = ", ".join(payload.get("bosses", [])) or "none"
         elites = ", ".join(payload.get("elites", [])) or "none"
+        victory = payload.get("victory")
+        outcome = "won" if victory is True else ("died" if victory is False else "ended")
         return (
-            f"Run ended on floor {floor} with score {score}. "
+            f"Run {outcome} on floor {floor} with score {score}. "
             f"Bosses seen: {bosses}. Elites seen: {elites}. "
             f"Summary: {payload.get('run_memory_summary', '')}"
         )

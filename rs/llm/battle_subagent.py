@@ -336,11 +336,14 @@ class BattleSubagent:
         }
 
     def _agent_node(self, state: BattleSubagentState) -> dict[str, Any]:
+        import time as _time
         messages = list(state.get("messages", []))
+        _t0 = _time.perf_counter()
         response = self._model_with_tools.invoke(messages)
+        _elapsed_ms = (_time.perf_counter() - _t0) * 1000
         tool_call_names = [str(tc.get("name", "")) for tc in getattr(response, "tool_calls", []) if str(tc.get("name", "")).strip()]
         log_to_run(
-            "BattleSubagent model response: "
+            f"[TIMING] BattleSubagent._agent_node LLM call took {_elapsed_ms:.0f}ms | "
             f"tool_calls={tool_call_names or ['none']} | "
             f"content={self._preview_log_text(self._extract_explanation([response]))}"
         )
@@ -353,6 +356,19 @@ class BattleSubagent:
         validation_attempt = int(state.get("validation_attempt_count", 0))
 
         commands = self._parse_submitted_commands(messages)
+
+        # Enforce one-command-at-a-time: keep only the first command
+        if len(commands) > 1:
+            rejected = commands[1:]
+            commands = commands[:1]
+            working_memory = self._append_step_summary(
+                working_memory,
+                f"truncated to 1 command; rejected {rejected}",
+            )
+            log_to_run(
+                f"BattleSubagent truncated submission to first command: "
+                f"accepted={commands}, rejected={rejected}"
+            )
 
         if not commands:
             fallback = self._build_guardrail_fallback_commands(context)
@@ -694,14 +710,28 @@ class BattleSubagent:
         player_hp = game_state.get("current_hp", "unknown")
         max_hp = game_state.get("max_hp", "unknown")
         floor = game_state.get("floor", "unknown")
-        room_phase = game_state.get("room_phase", "unknown")
-        steps = len(working_memory.get("executed_command_batches", []))
+        room_type = game_state.get("room_type", "MONSTER")
+        combat_state = final_state.combat_state() or {}
+        turn = combat_state.get("turn", "?")
+        monsters = [m for m in final_state.get_monsters() if not m.get("is_gone", False)]
+        if monsters:
+            m = monsters[0]
+            enemy_desc = f"{m.get('name', 'enemy')} HP {m.get('current_hp', '?')}/{m.get('max_hp', '?')}"
+        else:
+            enemy_desc = "no surviving enemy"
+        batches = working_memory.get("executed_command_batches", [])
+        commands_str = ", ".join(
+            "[" + " | ".join(batch) + "]" for batch in batches[-8:]
+        ) or "none"
         recent_steps = " | ".join(working_memory.get("recent_step_summaries", [])[-4:])
         return (
-            f"Battle session ended on floor {floor} with room_phase={room_phase}. "
-            f"Player HP {player_hp}/{max_hp}. "
-            f"Executed {steps} command batches. "
-            f"Recent battle notes: {recent_steps or 'none'}"
+            f"Floor {floor} {room_type} battle, {turn} turns. "
+            f"Player HP {player_hp}/{max_hp}. {enemy_desc}.\n"
+            f"Commands executed: {commands_str}\n"
+            f"Step notes: {recent_steps or 'none'}\n"
+            f"Review: Was blocking prioritised when the enemy's damage intent was high? "
+            f"Were the most powerful cards played efficiently? "
+            f"What would improve survival or HP retention next time?"
         )
 
     @staticmethod

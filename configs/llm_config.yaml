@@ -17,4 +17,6 @@ langmem:
   top_k: 5
   reflection_batch_size: 8
   max_semantic_memories_per_namespace: 200
+  max_retrospective_memories: 50
+  min_record_confidence: 0.4
   fail_fast_init: true

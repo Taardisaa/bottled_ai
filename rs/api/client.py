@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import time
 
 from rs.api.transport import GameTransport, ProtocolError, SocketGameTransport
+from rs.helper.logger import log_to_run
 
 
 class Client:
@@ -19,8 +21,12 @@ class Client:
         self._connected = True
 
     def send_message(self, message: str, silent: bool = False, before_run: bool = False) -> str:
+        t0 = time.perf_counter()
         response = self._transport.send(message, silent=silent, before_run=before_run)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
         self._validate_protocol_response(response)
+        if elapsed_ms > 100:
+            log_to_run(f"[TIMING] Client.send_message '{message[:40]}' took {elapsed_ms:.0f}ms")
         return response
 
     def _validate_protocol_response(self, response: str) -> None:

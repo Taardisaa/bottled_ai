@@ -380,8 +380,17 @@ class RewardSubagentBase:
     def _session_finalize_node(self, state: RewardSubagentState) -> dict[str, Any]:
         runtime = state["runtime"]
         final_state = runtime.current_state()
-        final_summary = self._build_final_summary(final_state, dict(state.get("working_memory", {})))
+        working_memory = dict(state.get("working_memory", {}))
+        final_summary = self._build_final_summary(final_state, working_memory)
         log_to_run(f"{self._handler_name} subagent session ended: {state.get('session_id', '')}")
+        if final_summary.strip():
+            final_context = self._augment_context(state["current_context"], working_memory)
+            self._langmem_service.record_custom_memory(
+                final_context,
+                final_summary,
+                tags=("reward_summary", self._handler_name),
+                reflect=True,
+            )
         handled = bool(state.get("handled", False))
         if self.is_in_scope(final_state) and not state.get("executed_commands"):
             handled = False
@@ -433,12 +442,18 @@ class RewardSubagentBase:
         game_state = final_state.game_state()
         floor = game_state.get("floor", "unknown")
         room_type = game_state.get("room_type", "unknown")
-        room_phase = game_state.get("room_phase", "unknown")
+        batches = working_memory.get("executed_command_batches", [])
+        commands_str = ", ".join(
+            "[" + " | ".join(batch) + "]" for batch in batches
+        ) or "none"
         recent_steps = " | ".join(working_memory.get("recent_step_summaries", [])[-4:])
         return (
-            f"{self._handler_name} session ended on floor {floor} with room_type={room_type} "
-            f"room_phase={room_phase}. Executed {len(working_memory.get('executed_command_batches', []))} "
-            f"command batches. Recent reward notes: {recent_steps or 'none'}"
+            f"Floor {floor} {room_type} reward.\n"
+            f"Commands: {commands_str}\n"
+            f"Step notes: {recent_steps or 'none'}\n"
+            f"Review: Was the chosen reward (card, gold, relic, or potion) the best option "
+            f"given the current deck composition and upcoming challenges? "
+            f"Does the choice reinforce or fill a gap in the deck strategy?"
         )
 
     def _commands_for_context(self, context: AgentContext, proposed_command: str) -> list[str] | None:

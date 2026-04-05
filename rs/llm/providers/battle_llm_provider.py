@@ -16,7 +16,7 @@ Rules:
 - Do not invent commands that are not in available_commands.
 - For play commands, use the protocol form "play <hand_index> [target_index]".
 - For hand-select or grid screens, use "choose <index>" and include "confirm" / "wait 30" when needed.
-- When you have decided on the best move, call submit_battle_commands with your chosen commands.
+- Submit exactly ONE command at a time via submit_battle_commands. After each command, you will receive updated state with current energy, HP, etc. Only submit "end" when you have no more playable cards for your remaining energy.
 - Prefer short, factual explanations.
 
 Current battle state:

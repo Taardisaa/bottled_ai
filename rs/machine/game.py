@@ -75,10 +75,40 @@ class Game:
         start_message = f"start {self.character.value}"
         if seed:
             start_message += " 0 " + seed
+        self._drain_stale_state_before_start(start_message)
         self.__send_setup_command(start_message)
         state_seed = get_seed_string(self.last_state.game_state()['seed'])
         init_run_logging(state_seed)
         self.__send_command("choose 0")
+
+    def _drain_stale_state_before_start(self, start_message: str, max_attempts: int = 20) -> None:
+        """If the game is stuck mid-run from a previous crash, navigate back to a
+        state where the ``start`` command is accepted."""
+        start_verb = start_message.split()[0]
+        # Query current state without side effects
+        probe = json.loads(self.client.send_message("state"))
+        available = probe.get("available_commands", [])
+        if start_verb in available or not probe.get("in_game", False):
+            return
+
+        log_to_run(f"Game state stale before start (available={available}), draining")
+        self.last_state = GameState(probe)
+        for _ in range(max_attempts):
+            for cmd in (Command.PROCEED, Command.SKIP, Command.CANCEL,
+                        Command.LEAVE, Command.CONFIRM):
+                if self.last_state.has_command(cmd):
+                    self.__send_setup_command(cmd.value)
+                    break
+            else:
+                if self.last_state.has_command(Command.CHOOSE) and self.last_state.get_choice_list():
+                    self.__send_setup_command("choose 0")
+                else:
+                    break
+            new_available = self.last_state.json.get("available_commands", [])
+            if start_verb in new_available or not self.last_state.json.get("in_game", False):
+                log_to_run("Drained stale state, ready for start")
+                return
+        log_to_run("Could not drain stale state after max attempts")
 
     def _state_fingerprint(self) -> str:
         gs = self.last_state.game_state()
@@ -212,11 +242,13 @@ class Game:
         screen_type = str(game_state.get("screen_type", "UNKNOWN"))
         screen_state = game_state.get("screen_state", {})
         score = screen_state.get("score") if isinstance(screen_state, dict) else None
+        victory = True if screen_type == "COMPLETE" else (False if screen_type == "GAME_OVER" else None)
 
         log_to_run(
             "Run finished: "
             f"floor={floor if floor is not None else 'unknown'}, "
-            f"score={score if score is not None else 'unknown'}"
+            f"score={score if score is not None else 'unknown'}, "
+            f"outcome={'won' if victory is True else ('died' if victory is False else 'ended')}"
         )
 
         context = AgentContext(
@@ -242,6 +274,7 @@ class Game:
         payload = {
             "floor": floor,
             "score": score,
+            "victory": victory,
             "bosses": list(self.run_bosses),
             "elites": list(self.run_elites),
             "run_memory_summary": context.extras["run_memory_summary"],

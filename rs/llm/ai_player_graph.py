@@ -1556,28 +1556,52 @@ class AIPlayerGraph:
                 summary=reward_session.summary,
             )
 
-        commands = self.decide(runtime.current_state())
-        if commands is None:
-            fallback = self._deterministic_safe_fallback(runtime.current_state())
-            if fallback is not None:
-                log_to_run(f"Graph decide failed, using safe fallback: {fallback}")
-                final_state = runtime.execute(fallback)
+        for attempt in range(2):
+            commands = self.decide(runtime.current_state())
+            if commands is None:
+                fallback = self._deterministic_safe_fallback(runtime.current_state())
+                if fallback is not None:
+                    log_to_run(f"Graph decide returned None (attempt {attempt + 1}), using safe fallback: {fallback}")
+                    final_state = runtime.execute(fallback)
+                    return ActionExecutionResult(
+                        handled=True,
+                        final_state=final_state,
+                        commands=None,
+                        steps=1,
+                        summary="graph_decide_failed_deterministic_fallback",
+                    )
+                return ActionExecutionResult(handled=False, final_state=runtime.current_state())
+
+            try:
+                final_state = runtime.execute(commands)
                 return ActionExecutionResult(
                     handled=True,
                     final_state=final_state,
                     commands=None,
                     steps=1,
-                    summary="graph_decide_failed_deterministic_fallback",
+                    summary="graph_decide_then_execute",
                 )
-            return ActionExecutionResult(handled=False, final_state=runtime.current_state())
-        final_state = runtime.execute(commands)
-        return ActionExecutionResult(
-            handled=True,
-            final_state=final_state,
-            commands=None,
-            steps=1,
-            summary="graph_decide_then_execute",
-        )
+            except Exception as exc:
+                log_to_run(
+                    f"Graph commands {commands} rejected by game (attempt {attempt + 1}): {exc}, "
+                    f"retrying with fresh state"
+                )
+                if attempt > 0:
+                    break
+
+        # Both attempts failed — deterministic fallback as last resort
+        fallback = self._deterministic_safe_fallback(runtime.current_state())
+        if fallback is not None:
+            log_to_run(f"Graph commands failed after retries, using safe fallback: {fallback}")
+            final_state = runtime.execute(fallback)
+            return ActionExecutionResult(
+                handled=True,
+                final_state=final_state,
+                commands=None,
+                steps=1,
+                summary="graph_commands_failed_deterministic_fallback",
+            )
+        return ActionExecutionResult(handled=False, final_state=runtime.current_state())
 
     def _deterministic_safe_fallback(self, state: GameState) -> list[str] | None:
         for cmd in (Command.PROCEED, Command.LEAVE, Command.CONFIRM, Command.SKIP, Command.CANCEL):
