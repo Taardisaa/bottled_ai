@@ -139,6 +139,7 @@ class BattleSubagent:
             submit_battle_commands,
         ]
 
+        self._model = chat_model
         self._model_with_tools = chat_model.bind_tools(self._langgraph_tools)
         self._tool_node = ToolNode(self._langgraph_tools)
 
@@ -169,6 +170,7 @@ class BattleSubagent:
             graph.add_node("session_bootstrap", self._session_bootstrap_node)
             graph.add_node("retrieve_battle_experience", self._retrieve_battle_experience_node)
             graph.add_node("state_ingest", self._state_ingest_node)
+            graph.add_node("think_node", self._think_node)
             graph.add_node("agent_node", self._agent_node)
             graph.add_node("tool_node", self._tool_node)
             graph.add_node("action_validate", self._action_validate_node)
@@ -183,11 +185,12 @@ class BattleSubagent:
                 "state_ingest",
                 self._route_after_state_ingest,
                 {
-                    "agent_node": "agent_node",
+                    "think_node": "think_node",
                     "action_commit": "action_commit",
                     "session_finalize": "session_finalize",
                 },
             )
+            graph.add_edge("think_node", "agent_node")
             graph.add_conditional_edges(
                 "agent_node",
                 self._should_continue,
@@ -354,6 +357,32 @@ class BattleSubagent:
             "pending_decision_explanation": "",
             "pending_decision_confidence": 0.0,
         }
+
+    def _think_node(self, state: BattleSubagentState) -> dict[str, Any]:
+        import time as _time
+        messages = list(state.get("messages", []))
+        think_messages = messages + [HumanMessage(
+            content="Analyse the current battle state. What are the key threats, opportunities, "
+                    "and your plan for this turn? Do NOT call any tools — just reason."
+        )]
+        _t0 = _time.perf_counter()
+        response = self._model.invoke(think_messages)
+        _elapsed_ms = (_time.perf_counter() - _t0) * 1000
+        reasoning = ""
+        if isinstance(response.content, str):
+            reasoning = response.content.strip()
+        elif isinstance(response.content, list):
+            reasoning = " ".join(
+                str(b.get("text", "")) for b in response.content
+                if isinstance(b, dict) and b.get("type") == "text"
+            ).strip()
+        log_to_run(
+            f"[TIMING] BattleSubagent._think_node took {_elapsed_ms:.0f}ms | "
+            f"reasoning={self._preview_log_text(reasoning, limit=-1)}"
+        )
+        if reasoning:
+            return {"messages": [AIMessage(content=reasoning)]}
+        return {}
 
     def _agent_node(self, state: BattleSubagentState) -> dict[str, Any]:
         import time as _time
@@ -601,12 +630,12 @@ class BattleSubagent:
 
     def _route_after_state_ingest(
             self, state: BattleSubagentState
-    ) -> Literal["agent_node", "action_commit", "session_finalize"]:
+    ) -> Literal["think_node", "action_commit", "session_finalize"]:
         if bool(state.get("battle_complete")):
             return "session_finalize"
         if bool(state.get("skip_agent")):
             return "action_commit"
-        return "agent_node"
+        return "think_node"
 
     def _should_continue(
             self, state: BattleSubagentState
