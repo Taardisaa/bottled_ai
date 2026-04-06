@@ -76,16 +76,19 @@ actionable strategic rules from it and store them for future reference.
 Rules for what to store:
 - Write only in plain game terms: card names, enemy names, floor ranges, HP values, room types (ELITE/BOSS/MONSTER).
 - Answer any "Review:" questions in the summary by forming a concrete strategic rule.
-- Generalise: "Against Lagavulin, prioritise blocking before turn 3" not "chose play 2 0 with confidence 0.80".
+- Generalise from specific plays to reusable situational rules. Examples of GOOD rules:
+  "Against Jaw Worm, finish it quickly — it buffs itself over time, so longer fights cost more HP."
+  "When an enemy is about to deal lethal damage, prioritise block cards or potions to survive."
+  "In multi-enemy fights, focus fire on one enemy to reduce total incoming damage per turn."
 - NEVER store: confidence scores, handler names, session IDs, guardrail names, or any internal system label.
   Handler names are internal labels like BattleHandler, CombatRewardHandler, MapHandler, CardRewardHandler —
   do NOT repeat them. If the input contains these labels, ignore them.
   BAD: "BattleHandler chose play 2 0 with confidence 0.85" — never write this.
-  GOOD: "Against Gremlin Nob, prioritise block cards before taking high-damage hits."
 - Consolidate: if a rule already exists and this observation reinforces it, strengthen or refine the existing
   memory rather than adding a duplicate.
-- If an action was clearly suboptimal (e.g. lost significant HP when blocking would have prevented it), record
-  what should be done differently under similar conditions."""
+- If an action was clearly suboptimal, record what should be done differently. Suboptimal actions include both:
+  (a) taking unnecessary damage when blocking would have prevented it, AND
+  (b) spending a turn blocking when finishing the enemy would have prevented more total damage."""
 
 _STS_RETROSPECTIVE_INSTRUCTIONS = """You are extracting high-level strategic lessons for a Slay the Spire AI agent
 by reviewing an entire completed run.
@@ -97,14 +100,15 @@ Rules for what to store:
 - Write only in plain game terms: card names, enemy types, floor ranges, HP thresholds, relic names, act numbers.
 - Focus on run-arc patterns: deck composition mismatches, missed upgrade opportunities, poor path choices, resource
   mismanagement across multiple floors.
-- Good examples: "Dying before act 2 is often caused by insufficient block cards — prioritise 1-2 block cards in
-  early combat rewards", "Skipping elite fights in act 1 preserves HP for the boss".
+- Good examples:
+  "Dying before act 2 is often caused by fights lasting too many turns — a mix of damage and block cards in
+  early rewards helps."
+  "Skipping elite fights in act 1 preserves HP but weakens deck scaling into act 2 — consider the tradeoff."
+  "Fights that dragged past 5+ turns caused the most HP loss across the run."
 - NEVER store: confidence scores, handler names (BattleHandler, MapHandler, CombatRewardHandler, etc.),
   session IDs, command syntax details, or guardrail system labels. If the input mentions these labels,
   ignore them entirely.
   BAD: "BattleHandler chose play 3 0 with confidence 0.25 on floor 5" — never write this.
-  GOOD: "In Act 1, dying before floor 10 often correlates with no block cards in the deck —
-  pick at least one block card from early combat rewards."
 - Consolidate existing memories: if a pattern is already recorded, strengthen or update rather than duplicate.
 - Store what to do DIFFERENTLY next run, not just what happened."""
 

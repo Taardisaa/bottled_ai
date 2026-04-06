@@ -134,8 +134,6 @@ class BattleSubagent:
 
         retrieve_tool = make_retrieve_battle_experience_tool(self._langmem_service)
         self._langgraph_tools = [
-            enumerate_legal_actions,
-            analyze_with_calculator,
             validate_battle_command,
             retrieve_tool,
             submit_battle_commands,
@@ -315,6 +313,18 @@ class BattleSubagent:
                 "pending_decision_explanation": "battle_subagent_no_progress_guardrail",
                 "pending_decision_confidence": 0.25,
             }
+
+        # Pre-compute dynamic context: legal actions and calculator recommendation
+        if not battle_complete:
+            legal_actions = self._enumerate_tool.run(context, {})
+            working_memory["legal_actions"] = legal_actions
+            try:
+                calc_result = self._calculator_tool.run(
+                    context, {"max_path_count": self._config.fallback_max_path_count}
+                )
+                working_memory["calculator_recommendation"] = calc_result.get("recommended_commands", [])
+            except Exception:
+                working_memory["calculator_recommendation"] = []
 
         # Normal path — reset messages for this turn and let agent decide
         log_to_run(
@@ -745,9 +755,9 @@ class BattleSubagent:
             f"Player {hp_str}. {enemy_desc}.\n"
             f"Commands executed: {commands_str}\n"
             f"Step notes: {recent_steps or 'none'}\n"
-            f"Review: Was blocking prioritised when the enemy's damage intent was high? "
-            f"Were the most powerful cards played efficiently? "
-            f"What would improve survival or HP retention next time?"
+            f"Review: Were the right plays chosen given the enemy's HP and intent? "
+            f"Were cards and energy used efficiently this fight? "
+            f"What could be done differently to win the fight more efficiently?"
         )
 
     @staticmethod

@@ -11,12 +11,19 @@ You are the battle subagent for a Slay the Spire bot.
 
 You are controlling exactly one battle session. Decide the next best step for the current battle state.
 
+Situational guidelines:
+- If you can defeat an enemy within a few moves, prioritise finishing it off.
+- If the enemy's attack would kill you or leave you critically low, prioritise blocking or using potions.
+- If you cannot defeat the enemy soon and it is attacking, balance damage and block based on the threat.
+- In multi-enemy fights, focus fire on one enemy to reduce incoming damage sources.
+- If you are unsure what to do next, consider the calculator's suggestion.
+
 Rules:
-- Use enumerate_legal_actions to discover legal commands.
+- Legal actions and calculator recommendation are provided below. Use submit_battle_commands to execute your chosen command.
 - For play commands, use "play <hand_index> [target_index]".
 - For hand-select or grid screens, use "choose <index>" and include "confirm" / "wait 30" when needed.
 - Submit exactly ONE command at a time via submit_battle_commands. After each command, you will receive updated state. Only submit "end" when you have no more playable cards for your remaining energy.
-- Prefer short, factual explanations.
+- Before each tool call, briefly state: what you observe (enemy HP, intent, your hand), what you plan to do, and why. Keep it to 1-3 sentences.
 
 Current battle state:
 {battle_payload}
@@ -89,6 +96,13 @@ def build_battle_prompt(context: AgentContext, working_memory: dict[str, Any]) -
         context_parts.append(sem_mem)
     if context_parts:
         payload["context"] = " | ".join(context_parts)
+
+    legal = working_memory.get("legal_actions", {})
+    if legal.get("categories"):
+        payload["legal_actions"] = legal["categories"]
+    calc_rec = working_memory.get("calculator_recommendation", [])
+    if calc_rec:
+        payload["calculator_recommendation"] = calc_rec
 
     step_summaries = working_memory.get("recent_step_summaries", [])[-3:]
     history = _compact_history(working_memory)

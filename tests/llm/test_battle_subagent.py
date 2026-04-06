@@ -122,7 +122,7 @@ class TestBattleSubagent(unittest.TestCase):
     def test_subagent_can_use_tool_then_commit_action_until_battle_ends(self):
         langmem = FakeLangMemService()
         model = ScriptedChatModel([
-            _tool_call("enumerate_legal_actions"),
+            _tool_call("validate_battle_command", {"commands": ["end"]}),
             _submit(["end"]),
         ])
         subagent = build_battle_subagent(model, langmem)
@@ -200,9 +200,7 @@ class TestBattleSubagent(unittest.TestCase):
         reward_state = load_resource_state("/card_reward/card_reward_take.json")
 
         model = ScriptedChatModel([
-            _tool_call("enumerate_legal_actions"),
             _submit(["end"], tc_id="tc_first"),
-            _tool_call("enumerate_legal_actions"),
             _submit(["end"], tc_id="tc_second"),
         ])
         subagent = build_battle_subagent(model, langmem)
@@ -221,7 +219,7 @@ class TestBattleSubagent(unittest.TestCase):
         langmem = FakeLangMemService()
         model = ScriptedChatModel([
             _tool_call("retrieve_battle_experience"),
-            _tool_call("analyze_with_calculator"),
+            _tool_call("validate_battle_command", {"commands": ["end"]}),
             _submit(["end"]),
         ])
         subagent = build_battle_subagent(model, langmem)
@@ -234,7 +232,7 @@ class TestBattleSubagent(unittest.TestCase):
         self.assertTrue(result.handled)
         self.assertEqual(1, len(langmem.recorded))
         self.assertIn("retrieve_battle_experience", langmem.recorded[0][1].required_tools_used)
-        self.assertIn("analyze_with_calculator", langmem.recorded[0][1].required_tools_used)
+        self.assertIn("validate_battle_command", langmem.recorded[0][1].required_tools_used)
 
     def test_subagent_integration_can_run_multiple_battle_steps_before_exit(self):
         langmem = FakeLangMemService()

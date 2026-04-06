@@ -17,7 +17,7 @@ from rs.utils.llm_utils import run_llm_preflight_check
 # If there are run seeds, it will run them. Otherwise, it will use the run amount.
 run_seeds = [
     # 'LGZ12EEMFGUK',
-    # "114514"
+    "114514"
 ]
 
 DEFAULT_RUN_AMOUNT = 50

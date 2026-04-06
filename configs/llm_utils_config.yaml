@@ -1,5 +1,5 @@
 fast_llm_model: qwen-local
-llm_enable_thinking: false
+llm_enable_thinking: true
 llm_two_layer_struct_convert: true
 # Use OpenRouter by setting fast_llm_model to openrouter/<provider>/<model>
 # Example: openrouter/openai/gpt-5-mini
