@@ -21,9 +21,9 @@ run_seeds = [
 ]
 
 DEFAULT_RUN_AMOUNT = 50
-# DEFAULT_CHARACTER = Character.WATCHER
+DEFAULT_CHARACTER = Character.WATCHER
 # DEFAULT_CHARACTER = Character.IRONCLAD
-DEFAULT_CHARACTER = Character.SILENT
+# DEFAULT_CHARACTER = Character.SILENT
 
 
 def initialize_client_and_langmem(

@@ -25,18 +25,21 @@ def _build_hand_cards(state: GameState) -> list[dict[str, Any]]:
 
     summaries: list[dict[str, Any]] = []
     for index, card in enumerate(state.hand.cards, start=1):
-        summaries.append({
+        entry: dict[str, Any] = {
             "hand_index": index,
             "name": card.name,
-            "id": card.id,
             "cost": card.cost,
             "is_playable": card.is_playable,
-            "type": card.type.value,
-            "upgrades": card.upgrades,
-            "has_target": card.has_target,
-            "ethereal": card.ethereal,
-            "exhausts": card.exhausts,
-        })
+        }
+        if card.has_target:
+            entry["has_target"] = True
+        if card.upgrades:
+            entry["upgrades"] = card.upgrades
+        if card.ethereal:
+            entry["ethereal"] = True
+        if card.exhausts:
+            entry["exhausts"] = True
+        summaries.append(entry)
     return summaries
 
 
@@ -82,29 +85,38 @@ def _build_monster_summaries(state: GameState) -> list[dict[str, Any]]:
     for index, monster in enumerate(state.get_monsters()):
         if bool(monster.get("is_gone", False)):
             continue
-        summaries.append({
+        entry: dict[str, Any] = {
             "target_index": index,
             "name": monster.get("name"),
-            "id": monster.get("id"),
             "current_hp": monster.get("current_hp"),
             "max_hp": monster.get("max_hp"),
-            "block": monster.get("block"),
             "intent": monster.get("intent"),
-            "move_base_damage": monster.get("move_base_damage"),
-            "move_hits": monster.get("move_hits"),
-            "powers": monster.get("powers", []),
-        })
+        }
+        base_dmg = monster.get("move_base_damage", 0) or 0
+        hits = monster.get("move_hits", 0) or 0
+        if base_dmg > 0:
+            entry["dmg"] = f"{base_dmg}x{hits}" if hits > 1 else str(base_dmg)
+        block = monster.get("block", 0) or 0
+        if block > 0:
+            entry["block"] = block
+        powers = monster.get("powers", [])
+        if powers:
+            entry["powers"] = [
+                {"name": p.get("name"), "amount": p.get("amount")}
+                for p in powers if isinstance(p, dict)
+            ]
+        summaries.append(entry)
     return summaries
 
 
 def _build_potion_summaries(state: GameState) -> list[dict[str, Any]]:
     summaries: list[dict[str, Any]] = []
     for index, potion in enumerate(state.get_potions()):
+        if str(potion.get("id", "")).strip() == "Potion Slot":
+            continue
         summaries.append({
             "slot_index": index,
             "name": potion.get("name"),
-            "id": potion.get("id"),
-            "can_use": str(potion.get("id", "")).strip() != "Potion Slot",
         })
     return summaries
 
@@ -176,7 +188,11 @@ def build_battle_agent_context(
             "potion_summaries": potion_summaries,
             "player_energy": combat_state.get("player", {}).get("energy"),
             "player_block": combat_state.get("player", {}).get("block"),
-            "player_powers": combat_state.get("player", {}).get("powers", []),
+            "player_powers": [
+                {"name": p.get("name"), "amount": p.get("amount")}
+                for p in (combat_state.get("player", {}).get("powers", []) or [])
+                if isinstance(p, dict)
+            ],
             "screen_state": state.screen_state(),
             "game_state_ref": state,
             "battle_runtime": runtime,

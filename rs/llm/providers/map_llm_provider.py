@@ -15,6 +15,35 @@ PROMPT_TEMPLATE = (Path(__file__).resolve().parent / "prompts" / "map_decision_p
     encoding="utf-8"
 )
 
+_ROOM_SYMBOL_NAMES = {
+    "M": "MONSTER", "E": "ELITE", "R": "CAMPFIRE",
+    "$": "SHOP", "?": "EVENT", "T": "TREASURE", "B": "BOSS",
+}
+
+
+def _map_choice_to_next_room(choice_list: list[Any], next_nodes: Any) -> dict[int, str]:
+    """Map each choice index to the human-readable room type of the immediate next node."""
+    if not isinstance(next_nodes, list) or not next_nodes:
+        return {}
+    node_by_x: dict[int, str] = {}
+    for node in next_nodes:
+        if isinstance(node, dict):
+            x = node.get("x")
+            symbol = str(node.get("symbol", "?"))
+            if x is not None:
+                node_by_x[int(x)] = _ROOM_SYMBOL_NAMES.get(symbol, symbol)
+    result: dict[int, str] = {}
+    for index, choice in enumerate(choice_list):
+        choice_str = str(choice).strip()
+        if "=" in choice_str:
+            try:
+                x_val = int(choice_str.split("=", 1)[1])
+                if x_val in node_by_x:
+                    result[index] = node_by_x[x_val]
+            except (ValueError, IndexError):
+                pass
+    return result
+
 
 @dataclass
 class MapLlmProposal:
@@ -102,7 +131,10 @@ class MapLlmProvider:
             context: AgentContext,
             validation_feedback: Dict[str, Any] | None = None,
     ) -> str:
-        map_options_text = self._format_choice_list(context.choice_list)
+        map_options_text = self._format_choice_list(
+            context.choice_list,
+            context.extras.get("next_nodes"),
+        )
         choice_branch_summaries_text = self._format_choice_branch_summaries(
             context.extras.get("choice_branch_summaries", []),
         )
@@ -148,10 +180,18 @@ class MapLlmProvider:
             validation_feedback_block=validation_feedback_block,
         )
 
-    def _format_choice_list(self, choice_list: list[Any]) -> str:
+    def _format_choice_list(self, choice_list: list[Any], next_nodes: Any = None) -> str:
         if not choice_list:
             return "- none"
-        return "\n".join(f"- {index} | route=\"{str(choice).strip()}\"" for index, choice in enumerate(choice_list))
+        node_type_by_index = _map_choice_to_next_room(choice_list, next_nodes)
+        lines: list[str] = []
+        for index, choice in enumerate(choice_list):
+            room = node_type_by_index.get(index)
+            if room:
+                lines.append(f"- {index} | route=\"{str(choice).strip()}\" | next_room={room}")
+            else:
+                lines.append(f"- {index} | route=\"{str(choice).strip()}\"")
+        return "\n".join(lines)
 
     def _normalize_langmem_status(self, status: Any) -> str:
         status_text = str(status or "").strip().lower()

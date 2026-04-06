@@ -99,7 +99,12 @@ Rules for what to store:
   mismanagement across multiple floors.
 - Good examples: "Dying before act 2 is often caused by insufficient block cards — prioritise 1-2 block cards in
   early combat rewards", "Skipping elite fights in act 1 preserves HP for the boss".
-- Never store: confidence scores, handler names, session IDs, command syntax details, or guardrail system labels.
+- NEVER store: confidence scores, handler names (BattleHandler, MapHandler, CombatRewardHandler, etc.),
+  session IDs, command syntax details, or guardrail system labels. If the input mentions these labels,
+  ignore them entirely.
+  BAD: "BattleHandler chose play 3 0 with confidence 0.25 on floor 5" — never write this.
+  GOOD: "In Act 1, dying before floor 10 often correlates with no block cards in the deck —
+  pick at least one block card from early combat rewards."
 - Consolidate existing memories: if a pattern is already recorded, strengthen or update rather than duplicate.
 - Store what to do DIFFERENTLY next run, not just what happened."""
 
@@ -380,8 +385,13 @@ class LangMemService:
         self._reflection_manager_factory = reflection_manager_factory
         self._store: InMemoryStore | None = None
         self._lock = RLock()
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="langmem")
+        self._executor = ThreadPoolExecutor(
+            max_workers=max(1, config.langmem_max_reflection_workers),
+            thread_name_prefix="langmem",
+        )
         self._reflection_buffers: dict[tuple[str, str], list[str]] = defaultdict(list)
+        self._deferred_reflections: list[tuple[AgentContext, list[str], str]] = []
+        self._reflections_paused = False
         self._status = "disabled_by_config"
         self._status_detail = ""
         self._initialize()
@@ -549,7 +559,7 @@ class LangMemService:
         if len(self._reflection_buffers[buf_key]) >= self._config.langmem_reflection_batch_size:
             batch = list(self._reflection_buffers[buf_key])
             self._reflection_buffers[buf_key].clear()
-            self._executor.submit(self._reflect_batch, context, batch, "decision_batch")
+            self._submit_or_defer_reflection(context, batch, "decision_batch")
 
     def record_custom_memory(
             self,
@@ -581,11 +591,13 @@ class LangMemService:
         self._store_record(record)
 
         if reflect:
-            self._executor.submit(self._reflect_batch, context, [normalized_content], "custom_memory")
+            self._submit_or_defer_reflection(context, [normalized_content], "custom_memory")
 
     def finalize_run(self, context: AgentContext, payload: dict[str, Any]) -> None:
         if not self.is_ready():
             return
+
+        self.resume_reflections()
 
         run_id = self._resolve_run_id(context)
         batch = []
@@ -622,7 +634,29 @@ class LangMemService:
         narrative = "\n".join(narrative_parts)
         self._reflect_batch(context, [narrative], "run_retrospective")
 
+    def pause_reflections(self) -> None:
+        with self._lock:
+            self._reflections_paused = True
+
+    def resume_reflections(self) -> None:
+        with self._lock:
+            self._reflections_paused = False
+            pending = list(self._deferred_reflections)
+            self._deferred_reflections.clear()
+        for context, batch, trigger in pending:
+            self._executor.submit(self._reflect_batch, context, batch, trigger)
+
+    def _submit_or_defer_reflection(
+            self, context: AgentContext, batch: list[str], trigger: str,
+    ) -> None:
+        with self._lock:
+            if self._reflections_paused:
+                self._deferred_reflections.append((context, batch, trigger))
+                return
+        self._executor.submit(self._reflect_batch, context, batch, trigger)
+
     def shutdown(self, wait: bool = True) -> None:
+        self.resume_reflections()
         self._executor.shutdown(wait=wait)
 
     def __deepcopy__(self, memo: dict[int, Any]) -> LangMemService:
@@ -743,13 +777,13 @@ class LangMemService:
                     self._repository.upsert(record)
                 if self._store is not None:
                     self._store.put(namespace, record.memory_id, semantic_value, index=["content"])
-            if trigger == "run_retrospective":
+            if trigger in ("run_retrospective", "run_finalization"):
                 self._prune_retrospective_namespace(namespace)
             else:
                 self._prune_semantic_namespace(namespace)
 
     def _build_reflection_manager(self, context: AgentContext, trigger: str = "") -> Any:
-        is_retrospective = trigger == "run_retrospective"
+        is_retrospective = trigger in ("run_retrospective", "run_finalization")
         if is_retrospective:
             namespace = self._retrospective_namespace(context)
             instructions = _STS_RETROSPECTIVE_INSTRUCTIONS

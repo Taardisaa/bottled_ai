@@ -14,6 +14,7 @@ class FakeLangMemService:
     def __init__(self):
         self.recorded = []
         self.custom_memories = []
+        self.paused = False
 
     def build_context_memory(self, context):
         return {
@@ -27,6 +28,12 @@ class FakeLangMemService:
 
     def record_custom_memory(self, context, content, tags=(), reflect=False):
         self.custom_memories.append((context, content, tags, reflect))
+
+    def pause_reflections(self):
+        self.paused = True
+
+    def resume_reflections(self):
+        self.paused = False
 
     def status(self):
         return "ready"
@@ -132,7 +139,7 @@ class TestBattleSubagent(unittest.TestCase):
         self.assertEqual(1, len(langmem.custom_memories))
         custom_context, custom_content, custom_tags, custom_reflect = langmem.custom_memories[0]
         self.assertEqual("BattleHandler", custom_context.handler_name)
-        self.assertTrue(custom_content.startswith("Battle session ended on floor"))
+        self.assertTrue(custom_content.startswith("Floor"))
         self.assertEqual(("battle_summary", "BattleHandler"), custom_tags)
         self.assertTrue(custom_reflect)
 
@@ -182,7 +189,7 @@ class TestBattleSubagent(unittest.TestCase):
         messages = [call.args[0] for call in log_mock.call_args_list]
         self.assertTrue(any("BattleSubagent memory loaded:" in message for message in messages))
         self.assertTrue(any("BattleSubagent state ingest:" in message for message in messages))
-        self.assertTrue(any("BattleSubagent model response:" in message for message in messages))
+        self.assertTrue(any("BattleSubagent._agent_node LLM call took" in message for message in messages))
         self.assertTrue(any("BattleSubagent accepted submission:" in message for message in messages))
         self.assertTrue(any("BattleSubagent executing commands:" in message for message in messages))
         self.assertTrue(any("BattleSubagent post-execution state:" in message for message in messages))
@@ -319,6 +326,36 @@ class TestBattleSubagent(unittest.TestCase):
         self.assertEqual(["choose 1"], runtime.command_batches[1])
         self.assertEqual(["confirm"], runtime.command_batches[2])
         self.assertLessEqual(len(runtime.command_batches), 3)
+
+
+    def test_battle_summary_includes_hp_delta_when_hp_changed(self):
+        langmem = FakeLangMemService()
+        model = ScriptedChatModel([_submit(["end"])])
+        subagent = build_battle_subagent(model, langmem)
+
+        initial_state = load_resource_state("battles/general/battle_simple_state.json")
+        final_state = load_resource_state("/card_reward/card_reward_take.json")
+
+        # Patch final_state.game_state() to return a different current_hp than initial
+        import json as _json
+        initial_gs = initial_state.game_state()
+        start_hp = initial_gs.get("current_hp", 80)
+
+        # Build a fake final state with lower HP
+        end_hp = max(1, start_hp - 20)
+        final_payload = _json.loads(_json.dumps(final_state.json))
+        final_payload.setdefault("game_state", {})["current_hp"] = end_hp
+        final_payload["game_state"]["max_hp"] = initial_gs.get("max_hp", 80)
+        from rs.machine.state import GameState as _GS
+        final_state_modified = _GS(final_payload)
+
+        runtime = FakeBattleRuntime(initial_state, [final_state_modified])
+        subagent.run(initial_state, runtime)
+
+        self.assertEqual(1, len(langmem.custom_memories))
+        _, content, _, _ = langmem.custom_memories[0]
+        self.assertIn(f"{start_hp}→{end_hp}", content,
+                      f"Expected HP delta '{start_hp}→{end_hp}' in summary: {content!r}")
 
 
 if __name__ == "__main__":

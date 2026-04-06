@@ -312,8 +312,10 @@ class TestLangMemService(unittest.TestCase):
             semantic_records = [record for record in records if record.memory_type == "semantic"]
             self.assertEqual(1, len(semantic_records))
             self.assertIn("Prefer safe event choices", semantic_records[0].content)
-            semantic_items = service._store.search(("semantic", "neo_primates", "ironclad", "EventHandler"), limit=5)
-            self.assertEqual({"content": "Prefer safe event choices when HP is low."}, semantic_items[0].value["content"])
+            # run_finalization now routes to retrospective namespace (not the handler's semantic namespace)
+            self.assertEqual(("retrospective", "neo_primates", "ironclad"), semantic_records[0].namespace)
+            retro_items = service._store.search(("retrospective", "neo_primates", "ironclad"), limit=5)
+            self.assertEqual({"content": "Prefer safe event choices when HP is low."}, retro_items[0].value["content"])
 
     def test_hydrated_semantic_memory_restores_structured_content_shape(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -821,6 +823,59 @@ class TestLangMemService(unittest.TestCase):
             self.assertIn("block cards", result["retrieved_semantic_memories"])
 
 
+    def test_run_finalization_reflection_goes_to_retrospective_namespace(self):
+        # run_finalization trigger should write to ("retrospective",...) not ("semantic",...,"RunFinalizer")
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_path = Path(tmp) / "memory.sqlite3"
+            repo = LangMemRepository(str(repo_path))
+            captured_namespaces: list[tuple] = []
+
+            class CapturingReflectionManager:
+                def __init__(self, namespace, store):
+                    self.namespace = namespace
+                    captured_namespaces.append(namespace)
+
+                def invoke(self, payload):
+                    return [{
+                        "namespace": self.namespace,
+                        "key": "mem-run",
+                        "value": {"kind": "Memory", "content": {"content": "Deck lacked block cards."}},
+                    }]
+
+            service = LangMemService(
+                config=LlmConfig(
+                    enabled=True,
+                    langmem_enabled=True,
+                    langmem_sqlite_path=str(repo_path),
+                    langmem_reflection_batch_size=100,
+                    langmem_min_record_confidence=0.0,
+                ),
+                repository=repo,
+                embeddings_client=FakeEmbeddings(),
+                reflection_manager_factory=lambda namespace, store: CapturingReflectionManager(namespace, store),
+            )
+            context = AgentContext(
+                handler_name="RunFinalizer",
+                screen_type="GAME_OVER",
+                available_commands=[],
+                choice_list=[],
+                game_state={"floor": 9, "act": 1, "character_class": "IRONCLAD"},
+                extras={"run_id": "ironclad:seed1", "agent_identity": "neo_primates"},
+            )
+            service.finalize_run(
+                context,
+                {"floor": 9, "score": 80, "victory": False, "bosses": [], "elites": []},
+            )
+            service.shutdown(wait=True)
+
+            # All semantic namespaces used must be retrospective, never RunFinalizer
+            semantic_ns = [ns for ns in captured_namespaces if isinstance(ns, tuple)]
+            self.assertTrue(all(ns[0] == "retrospective" for ns in semantic_ns),
+                            f"Expected only retrospective namespaces, got: {semantic_ns}")
+            records = repo.load_all()
+            bad = [r for r in records if r.memory_type == "semantic" and r.namespace[-1] == "RunFinalizer"]
+            self.assertEqual([], bad, "No semantic memories should land in RunFinalizer namespace")
+
     def test_reflection_batch_per_handler_prevents_namespace_misattribution(self):
         # With per-handler buffers, a CombatRewardHandler decision reaching batch_size
         # should only flush the CombatRewardHandler buffer, leaving BattleHandler content
@@ -896,6 +951,63 @@ class TestLangMemService(unittest.TestCase):
                 all(ns[-1] == "CombatRewardHandler" for ns in flushed),
                 f"Expected only CombatRewardHandler namespace, got: {flushed}",
             )
+
+    def test_pause_reflections_defers_until_resume(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_path = Path(tmp) / "memory.sqlite3"
+            repo = LangMemRepository(str(repo_path))
+            reflect_calls: list[str] = []
+
+            class TrackingReflectionManager:
+                def __init__(self, namespace, store):
+                    self.namespace = namespace
+
+                def invoke(self, payload):
+                    reflect_calls.append("reflected")
+                    return [{
+                        "namespace": self.namespace,
+                        "key": "sem-1",
+                        "value": {"kind": "Memory", "content": {"content": "deferred memory"}},
+                    }]
+
+            service = LangMemService(
+                config=LlmConfig(
+                    enabled=True,
+                    langmem_enabled=True,
+                    langmem_sqlite_path=str(repo_path),
+                    langmem_min_record_confidence=0.0,
+                ),
+                repository=repo,
+                embeddings_client=FakeEmbeddings(),
+                reflection_manager_factory=lambda ns, store: TrackingReflectionManager(ns, store),
+            )
+            context = AgentContext(
+                handler_name="BattleHandler",
+                screen_type="BATTLE",
+                available_commands=["play 1"],
+                choice_list=[],
+                game_state={"floor": 3, "act": 1, "character_class": "IRONCLAD",
+                            "room_type": "MonsterRoom", "turn": 1, "current_hp": 80, "max_hp": 80},
+                extras={"run_id": "ironclad:seed1", "agent_identity": "neo_primates",
+                        "player_energy": 3, "monster_summaries": []},
+            )
+
+            service.pause_reflections()
+            service.record_custom_memory(
+                context, "Battle note", tags=("test",), reflect=True,
+            )
+            # Give the executor a moment — nothing should have fired
+            import time
+            time.sleep(0.1)
+            self.assertEqual(0, len(reflect_calls), "reflection should be deferred while paused")
+
+            service.resume_reflections()
+            service.shutdown(wait=True)
+            self.assertEqual(1, len(reflect_calls), "reflection should fire after resume")
+
+            records = repo.load_all()
+            semantic = [r for r in records if r.memory_type == "semantic"]
+            self.assertEqual(1, len(semantic))
 
     def test_battle_episodic_record_strips_tool_call_xml_from_explanation(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -7,6 +7,9 @@ Please answer in short plain text using these fields:
 Rules:
 - For normal map selection, proposed_command should usually be "choose <index>".
 - The index is 0-based and must match the Map options list below.
+- Each map option shows "next_room=TYPE" — this is the IMMEDIATE room you will enter.
+- CRITICAL: If HP is low, ALWAYS choose CAMPFIRE or SHOP over MONSTER or ELITE as the immediate next room.
+  At very low HP (<20%), entering a MONSTER or ELITE room means almost certain death.
 - Favor survivability when HP is low or elites are risky.
 - Never return null/empty proposed_command when at least one legal action exists.
 - If uncertain, still choose the safest legal option and reflect uncertainty via low confidence.

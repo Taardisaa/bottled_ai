@@ -82,6 +82,8 @@ class BattleWorkingMemory:
     no_progress_count: int = 0
     last_state_signature: str = ""
     last_executed_batch: list[str] = field(default_factory=list)
+    battle_start_hp: int | None = None
+    battle_start_max_hp: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -94,6 +96,8 @@ class BattleWorkingMemory:
             "no_progress_count": self.no_progress_count,
             "last_state_signature": self.last_state_signature,
             "last_executed_batch": list(self.last_executed_batch),
+            "battle_start_hp": self.battle_start_hp,
+            "battle_start_max_hp": self.battle_start_max_hp,
         }
 
 
@@ -222,9 +226,15 @@ class BattleSubagent:
     # Nodes
     # ------------------------------------------------------------------
 
-    def _session_bootstrap_node(self, _state: BattleSubagentState) -> dict[str, Any]:
+    def _session_bootstrap_node(self, state: BattleSubagentState) -> dict[str, Any]:
+        self._langmem_service.pause_reflections()
         session_id = uuid4().hex
         working_memory = BattleWorkingMemory(session_id=session_id)
+        initial_game_state = state.get("current_state")
+        if initial_game_state is not None:
+            gs = initial_game_state.game_state()
+            working_memory.battle_start_hp = gs.get("current_hp")
+            working_memory.battle_start_max_hp = gs.get("max_hp")
         log_to_run(f"BattleSubagent session started: {session_id}")
         return {
             "session_id": session_id,
@@ -562,6 +572,7 @@ class BattleSubagent:
                 tags=("battle_summary", "BattleHandler"),
                 reflect=True,
             )
+        self._langmem_service.resume_reflections()
         log_to_run(f"BattleSubagent session ended: {state.get('session_id', '')}")
         handled = bool(state.get("handled", False))
         if is_battle_scope_state(final_state) and not state.get("executed_commands"):
@@ -719,6 +730,11 @@ class BattleSubagent:
             enemy_desc = f"{m.get('name', 'enemy')} HP {m.get('current_hp', '?')}/{m.get('max_hp', '?')}"
         else:
             enemy_desc = "no surviving enemy"
+        start_hp = working_memory.get("battle_start_hp")
+        if start_hp is not None and start_hp != player_hp:
+            hp_str = f"HP {start_hp}→{player_hp}/{max_hp}"
+        else:
+            hp_str = f"HP {player_hp}/{max_hp}"
         batches = working_memory.get("executed_command_batches", [])
         commands_str = ", ".join(
             "[" + " | ".join(batch) + "]" for batch in batches[-8:]
@@ -726,7 +742,7 @@ class BattleSubagent:
         recent_steps = " | ".join(working_memory.get("recent_step_summaries", [])[-4:])
         return (
             f"Floor {floor} {room_type} battle, {turn} turns. "
-            f"Player HP {player_hp}/{max_hp}. {enemy_desc}.\n"
+            f"Player {hp_str}. {enemy_desc}.\n"
             f"Commands executed: {commands_str}\n"
             f"Step notes: {recent_steps or 'none'}\n"
             f"Review: Was blocking prioritised when the enemy's damage intent was high? "
