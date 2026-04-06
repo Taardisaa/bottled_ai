@@ -14,7 +14,7 @@ from rs.helper.logger import log_to_run
 from rs.llm.action_executor import ActionExecutionResult, UnifiedActionExecutor
 from rs.llm.action_policy_registry import ActionPolicyRegistry
 from rs.llm.battle_runtime import BattleRuntimeAdapter, BattleSessionResult
-from rs.llm.battle_subagent import BattleSubagent
+from rs.llm.battle_subagent import BattleSubagent, BattleSubagentConfig
 from rs.llm.campfire_subagent import CampfireSessionResult, CampfireSubagent
 from rs.llm.agents.base_agent import AgentContext, AgentDecision
 from rs.llm.config import LlmConfig, load_llm_config
@@ -121,7 +121,12 @@ class AIPlayerGraph:
         self._card_reward_provider = CardRewardLlmProvider()
         self._map_provider = MapLlmProvider()
         self._generic_provider = GenericLlmProvider()
-        self._battle_subagent = BattleSubagent(langmem_service=self._langmem_service) if battle_subagent is None else battle_subagent
+        self._battle_subagent = BattleSubagent(
+            langmem_service=self._langmem_service,
+            config=BattleSubagentConfig(
+                potion_allowed_room_types=list(self._config.battle_potion_allowed_room_types),
+            ),
+        ) if battle_subagent is None else battle_subagent
         self._campfire_subagent = (
             CampfireSubagent(langmem_service=self._langmem_service)
             if campfire_subagent is None else campfire_subagent

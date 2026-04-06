@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
 from typing import List
@@ -36,6 +36,9 @@ class LlmConfig:
     langmem_min_similarity_score: float = 0.65
     langmem_max_reflection_workers: int = 3
     langmem_fail_fast_init: bool = False
+    battle_potion_allowed_room_types: List[str] = field(
+        default_factory=lambda: ["MonsterRoomElite", "MonsterRoomBoss"]
+    )
 
     def __post_init__(self):
         """Normalize mutable defaults after dataclass initialization.
@@ -115,6 +118,9 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
     langmem_min_similarity_score_default = float(langmem_values.get("min_similarity_score", 0.65))
     langmem_max_reflection_workers_default = int(langmem_values.get("max_reflection_workers", 3))
     langmem_fail_fast_init_default = bool(langmem_values.get("fail_fast_init", False))
+    battle_potion_allowed_room_types_default = list(
+        values.get("battle_potion_allowed_room_types", ["MonsterRoomElite", "MonsterRoomBoss"])
+    )
 
     enabled = _parse_bool(os.environ.get("LLM_ENABLED"), enabled_default)
     enabled_handlers = _parse_handlers(os.environ.get("LLM_ENABLED_HANDLERS"), enabled_handlers_default)
@@ -197,4 +203,5 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
         langmem_min_similarity_score=langmem_min_similarity_score,
         langmem_max_reflection_workers=langmem_max_reflection_workers,
         langmem_fail_fast_init=langmem_fail_fast_init,
+        battle_potion_allowed_room_types=battle_potion_allowed_room_types_default,
     )

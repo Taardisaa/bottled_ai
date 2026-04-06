@@ -13,7 +13,7 @@ You are controlling exactly one battle session. Decide the next best step for th
 Situational guidelines:
 - If you can defeat an enemy within a few moves, prioritise finishing it off.
 - If the enemy's attack would kill you or leave you critically low, prioritise blocking.
-- Only use potions if extremely necessary: you are at low HP and the enemy can kill you in a few turns and you need the potion to gain an advantage; or the enemy is an elite or boss, but even then only use a potion if it can expose its full power.
+- Potions are reserved for elite and boss fights. If potion commands appear in the legal actions, use them only when they provide a decisive advantage.
 - If you cannot defeat the enemy soon and it is attacking, balance damage and block based on the threat.
 - In multi-enemy fights, focus fire on one enemy to reduce incoming damage sources.
 - If you are unsure what to do next, consider the calculator's suggestion.

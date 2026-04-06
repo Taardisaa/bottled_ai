@@ -69,6 +69,9 @@ class BattleSubagentConfig:
     fallback_max_path_count: int = 200
     max_validation_attempts: int = 2
     no_progress_limit: int = 2
+    potion_allowed_room_types: list[str] = field(
+        default_factory=lambda: ["MonsterRoomElite", "MonsterRoomBoss"]
+    )
 
 
 @dataclass
@@ -320,6 +323,15 @@ class BattleSubagent:
         # Pre-compute dynamic context: legal actions and calculator recommendation
         if not battle_complete:
             legal_actions = self._enumerate_tool.run(context, {})
+            # Filter out potion commands for non-allowed room types
+            room_type = context.game_state.get("room_type", "")
+            if room_type not in self._config.potion_allowed_room_types:
+                categories = legal_actions.get("categories", {})
+                if "potion" in categories:
+                    categories["potion"] = []
+                legal_actions["commands"] = [
+                    c for c in legal_actions.get("commands", []) if not str(c).startswith("potion ")
+                ]
             working_memory["legal_actions"] = legal_actions
             try:
                 calc_result = self._calculator_tool.run(
