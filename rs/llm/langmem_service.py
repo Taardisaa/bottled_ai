@@ -35,6 +35,39 @@ MemoryManagerFactory = Callable[[tuple[str, ...], InMemoryStore], Any]
 _TOOL_CALL_BLOCK_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 _COMPAT_PATCH_MARKER = "_compatibility_tool_call_bind_tools_patched"
 
+_CONFIDENCE_RE = re.compile(
+    r"""
+      \(?                                   # optional opening paren
+      (?:with\s+)?                           # optional "with "
+      [Cc]onf(?:idence)?                     # "conf" or "confidence" or "Confidence"
+      (?:\s*[:=]\s*|\s+)                     # separator: colon, equals, or space
+      \d+\.\d+                               # decimal score
+      \)?                                    # optional closing paren
+    """,
+    re.VERBOSE,
+)
+
+_HANDLER_NAME_RE = re.compile(
+    r"\b(?:Battle|CardReward|CombatReward|Event|Map|GridSelect|Shop|Campfire)Handler\b"
+    r"|\bRunFinalizer\b"
+)
+
+_SYSTEM_LABEL_RE = re.compile(
+    r"\b(?:"
+    r"guardrail_no_submission"
+    r"|battle_subagent_no_progress_guardrail"
+    r"|submit_battle_commands"
+    r"|deterministic_card_handoff_when_only_card_row_remains"
+    r"|deterministic_card_handoff_with_relic_selection"
+    r"|deterministic_card_handoff"
+    r"|all_cards_selected_confirm"
+    r")\b"
+)
+
+_META_STATS_RE = re.compile(
+    r"\(based\s+on\s+\d+\+?\s+instances?\s+across\s+\d+\+?\s+memory\s+records?\)"
+)
+
 _STS_EVENT_REFLECTION_INSTRUCTIONS = """You are extracting strategic lessons for a Slay the Spire AI agent.
 
 The input is a session summary from one in-game event (battle, campfire, or reward). Your job is to distill
@@ -683,7 +716,7 @@ class LangMemService:
             namespace = tuple(put["namespace"])
             key = str(put["key"])
             value = dict(put["value"])
-            content = _coerce_memory_content(value)
+            content = self._sanitize_reflection_content(_coerce_memory_content(value))
             now = _utc_now()
             record = MemoryRecord(
                 memory_id=key,
@@ -697,7 +730,13 @@ class LangMemService:
                 tags=("semantic", trigger, context.handler_name),
                 kind=str(value.get("kind", "Memory")),
             )
-            semantic_value = _build_store_value(record, raw_content=value.get("content"))
+            raw_content = value.get("content")
+            if isinstance(raw_content, dict) and "content" in raw_content:
+                raw_content = dict(raw_content)
+                raw_content["content"] = self._sanitize_reflection_content(str(raw_content["content"]))
+            elif isinstance(raw_content, str):
+                raw_content = self._sanitize_reflection_content(raw_content)
+            semantic_value = _build_store_value(record, raw_content=raw_content)
             semantic_value["trigger"] = trigger
             with self._lock:
                 if self._repository is not None:
@@ -804,7 +843,23 @@ class LangMemService:
         )
 
     @staticmethod
-    def _format_search_results(items: list[SearchItem], source_tag: str) -> str:
+    def _sanitize_reflection_content(content: str) -> str:
+        text = _CONFIDENCE_RE.sub("", content)
+        text = _HANDLER_NAME_RE.sub("", text)
+        text = _SYSTEM_LABEL_RE.sub("", text)
+        text = _META_STATS_RE.sub("", text)
+        text = re.sub(r"\(\s*\)", "", text)       # empty parens
+        text = re.sub(r",\s*,", ",", text)        # double commas
+        text = re.sub(r"\s+([.,;:!?])", r"\1", text)  # space before punctuation
+        text = re.sub(r"  +", " ", text)           # multiple spaces
+        return text.strip()
+
+    def _format_search_results(self, items: list[SearchItem], source_tag: str) -> str:
+        if not items:
+            return "none"
+
+        min_score = self._config.langmem_min_similarity_score
+        items = [item for item in items if (item.score or 0.0) >= min_score]
         if not items:
             return "none"
 

@@ -132,6 +132,19 @@ def _validate_potion(args: list[str], context: Any) -> ValidationResult:
             reason_details={"potion_slots": potion_slots, "potion_index": potion_idx},
         )
 
+    game_state_ref = getattr(context, "extras", {}).get("game_state_ref")
+    if game_state_ref is not None:
+        potions = game_state_ref.get_potions()
+        if 0 <= potion_idx < len(potions):
+            potion = potions[potion_idx]
+            if isinstance(potion, dict) and str(potion.get("id", "")).strip() == "Potion Slot":
+                return ValidationResult(
+                    False,
+                    "command_not_available",
+                    "cannot use or discard an empty potion slot",
+                    reason_details={"potion_slots": len(potions), "potion_index": potion_idx},
+                )
+
     if len(args) == 3 and not is_int_string(args[2]):
         return ValidationResult(False, "bad_syntax", "potion target index must be integer")
 

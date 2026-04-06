@@ -940,5 +940,219 @@ class TestLangMemService(unittest.TestCase):
             self.assertNotIn("submit_battle_commands", episodic[0].content)
 
 
+class TestSanitizeReflectionContent(unittest.TestCase):
+    def test_sanitize_strips_confidence_scores(self):
+        cases = [
+            "Iron Wave is strong with confidence 0.95 in Act 1.",
+            "Prioritize blocking, conf 0.85, against elites.",
+            "Select Iron Wave. Confidence: 0.98.",
+            "Good card (conf 0.80) for attack decks.",
+        ]
+        for text in cases:
+            result = LangMemService._sanitize_reflection_content(text)
+            self.assertNotRegex(result, r"\d+\.\d{2}", f"Score leaked in: {result}")
+            self.assertNotIn("confidence", result.lower())
+            self.assertNotIn("conf", result.lower())
+
+    def test_sanitize_strips_handler_names(self):
+        text = "CardRewardHandler selected Iron Wave over Pommel Strike."
+        result = LangMemService._sanitize_reflection_content(text)
+        self.assertNotIn("CardRewardHandler", result)
+        self.assertIn("Iron Wave", result)
+        self.assertIn("Pommel Strike", result)
+
+    def test_sanitize_strips_system_labels(self):
+        text = (
+            "Action taken due to guardrail_no_submission because no valid commands. "
+            "Used deterministic_card_handoff_when_only_card_row_remains for efficiency."
+        )
+        result = LangMemService._sanitize_reflection_content(text)
+        self.assertNotIn("guardrail_no_submission", result)
+        self.assertNotIn("deterministic_card_handoff_when_only_card_row_remains", result)
+
+    def test_sanitize_strips_meta_statistics(self):
+        text = "Block early against Gremlin Nob (based on 6+ instances across 4+ memory records)."
+        result = LangMemService._sanitize_reflection_content(text)
+        self.assertNotIn("based on", result)
+        self.assertNotIn("instances", result)
+        self.assertIn("Gremlin Nob", result)
+
+    def test_sanitize_combined_pollution(self):
+        text = (
+            "CombatRewardHandler chose choose 0 with confidence 1.00 because "
+            "deterministic_card_handoff_when_only_card_row_remains "
+            "(based on 6+ instances across 4+ memory records)"
+        )
+        result = LangMemService._sanitize_reflection_content(text)
+        self.assertNotIn("CombatRewardHandler", result)
+        self.assertNotIn("confidence", result)
+        self.assertNotIn("deterministic_card_handoff", result)
+        self.assertNotIn("based on", result)
+        self.assertNotIn("()", result)
+        self.assertNotIn("  ", result)
+
+    def test_sanitize_preserves_clean_game_text(self):
+        text = "Against Gremlin Nob, prioritise block cards before taking high-damage hits."
+        result = LangMemService._sanitize_reflection_content(text)
+        self.assertEqual(text, result)
+
+
+class TestSanitizeReflectionIntegration(unittest.TestCase):
+    def test_reflect_batch_stores_sanitized_content(self):
+        class PollutedReflectionManager:
+            def __init__(self, namespace, store):
+                self.namespace = namespace
+
+            def invoke(self, payload):
+                return [{
+                    "namespace": self.namespace,
+                    "key": "polluted-mem-1",
+                    "value": {
+                        "kind": "Memory",
+                        "content": {
+                            "content": (
+                                "CardRewardHandler selected Iron Wave with confidence 0.95 "
+                                "over Pommel Strike. BattleHandler uses submit_battle_commands "
+                                "with guardrail_no_submission active "
+                                "(based on 6+ instances across 4+ memory records)."
+                            )
+                        },
+                    },
+                }]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_path = str(Path(tmp) / "memory.sqlite3")
+            repo = LangMemRepository(repo_path)
+            service = LangMemService(
+                config=LlmConfig(
+                    enabled=True,
+                    langmem_enabled=True,
+                    langmem_sqlite_path=repo_path,
+                    langmem_min_record_confidence=0.0,
+                    langmem_reflection_batch_size=1,
+                ),
+                repository=repo,
+                embeddings_client=FakeEmbeddings(),
+                reflection_manager_factory=lambda ns, store: PollutedReflectionManager(ns, store),
+            )
+            context = AgentContext(
+                handler_name="EventHandler",
+                screen_type="EVENT",
+                available_commands=["choose"],
+                choice_list=["a"],
+                game_state={"floor": 5, "act": 1, "character_class": "IRONCLAD"},
+                extras={"run_id": "ironclad:seed1", "agent_identity": "neo_primates"},
+            )
+            service.record_accepted_decision(
+                context,
+                AgentDecision(proposed_command="choose 0", confidence=0.9, explanation="safe choice"),
+            )
+            service.shutdown(wait=True)
+
+            records = repo.load_all()
+            semantic = [r for r in records if r.memory_type == "semantic"]
+            self.assertEqual(1, len(semantic))
+            content = semantic[0].content
+            self.assertNotIn("CardRewardHandler", content)
+            self.assertNotIn("BattleHandler", content)
+            self.assertNotIn("confidence", content.lower())
+            self.assertNotIn("guardrail_no_submission", content)
+            self.assertNotIn("submit_battle_commands", content)
+            self.assertNotIn("based on", content)
+            self.assertIn("Iron Wave", content)
+            self.assertIn("Pommel Strike", content)
+
+
+class TestSimilarityThresholdFiltering(unittest.TestCase):
+    def test_format_search_results_filters_below_threshold(self):
+        from datetime import datetime, timezone
+        from langgraph.store.base import SearchItem
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service = LangMemService(
+                config=LlmConfig(
+                    enabled=True,
+                    langmem_enabled=True,
+                    langmem_sqlite_path=str(Path(tmp) / "memory.sqlite3"),
+                    langmem_min_similarity_score=0.70,
+                ),
+                embeddings_client=FakeEmbeddings(),
+                reflection_manager_factory=lambda ns, store: FakeReflectionManager(ns, store),
+            )
+            now = datetime.now(timezone.utc)
+            items = [
+                SearchItem(namespace=("test",), key="high", value={"content": "high score", "handler_name": "H"}, created_at=now, updated_at=now, score=0.92),
+                SearchItem(namespace=("test",), key="mid", value={"content": "mid score", "handler_name": "H"}, created_at=now, updated_at=now, score=0.70),
+                SearchItem(namespace=("test",), key="low", value={"content": "low score", "handler_name": "H"}, created_at=now, updated_at=now, score=0.55),
+            ]
+            result = service._format_search_results(items, "SEM")
+            self.assertIn("match=0.92", result)
+            self.assertIn("match=0.70", result)
+            self.assertNotIn("match=0.55", result)
+            self.assertNotIn("low score", result)
+
+    def test_format_search_results_returns_none_when_all_below_threshold(self):
+        from datetime import datetime, timezone
+        from langgraph.store.base import SearchItem
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service = LangMemService(
+                config=LlmConfig(
+                    enabled=True,
+                    langmem_enabled=True,
+                    langmem_sqlite_path=str(Path(tmp) / "memory.sqlite3"),
+                    langmem_min_similarity_score=0.80,
+                ),
+                embeddings_client=FakeEmbeddings(),
+                reflection_manager_factory=lambda ns, store: FakeReflectionManager(ns, store),
+            )
+            now = datetime.now(timezone.utc)
+            items = [
+                SearchItem(namespace=("test",), key="low", value={"content": "low score", "handler_name": "H"}, created_at=now, updated_at=now, score=0.50),
+            ]
+            result = service._format_search_results(items, "EP")
+            self.assertEqual("none", result)
+
+    def test_build_context_memory_excludes_low_similarity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = LangMemService(
+                config=LlmConfig(
+                    enabled=True,
+                    langmem_enabled=True,
+                    langmem_sqlite_path=str(Path(tmp) / "memory.sqlite3"),
+                    langmem_top_k=5,
+                    langmem_min_similarity_score=0.50,
+                    langmem_min_record_confidence=0.0,
+                ),
+                embeddings_client=FakeEmbeddings(),
+                reflection_manager_factory=lambda ns, store: FakeEmptyReflectionManager(ns, store),
+            )
+            context = AgentContext(
+                handler_name="EventHandler",
+                screen_type="EVENT",
+                available_commands=["choose"],
+                choice_list=["choose 0"],
+                game_state={"floor": 5, "act": 1, "character_class": "IRONCLAD"},
+                extras={"run_id": "ironclad:seed1", "agent_identity": "neo_primates"},
+            )
+            for i in range(5):
+                service.record_accepted_decision(
+                    context,
+                    AgentDecision(
+                        proposed_command=f"choose {i}",
+                        confidence=0.9,
+                        explanation=f"event choice {i}",
+                    ),
+                )
+
+            result = service.build_context_memory(context)
+            episodic = result["retrieved_episodic_memories"]
+            if episodic != "none":
+                import re
+                scores = [float(m) for m in re.findall(r"match=(\d+\.\d+)", episodic)]
+                for score in scores:
+                    self.assertGreaterEqual(score, 0.50, f"Score {score} below threshold 0.50")
+
+
 if __name__ == "__main__":
     unittest.main()

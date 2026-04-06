@@ -19,4 +19,5 @@ langmem:
   max_semantic_memories_per_namespace: 200
   max_retrospective_memories: 50
   min_record_confidence: 0.4
+  min_similarity_score: 0.65
   fail_fast_init: true

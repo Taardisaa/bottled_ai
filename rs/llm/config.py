@@ -33,6 +33,7 @@ class LlmConfig:
     langmem_max_semantic_memories_per_namespace: int = 50
     langmem_max_retrospective_memories: int = 50
     langmem_min_record_confidence: float = 0.35
+    langmem_min_similarity_score: float = 0.65
     langmem_fail_fast_init: bool = False
 
     def __post_init__(self):
@@ -110,6 +111,7 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
     )
     langmem_max_retrospective_memories_default = int(langmem_values.get("max_retrospective_memories", 50))
     langmem_min_record_confidence_default = float(langmem_values.get("min_record_confidence", 0.35))
+    langmem_min_similarity_score_default = float(langmem_values.get("min_similarity_score", 0.65))
     langmem_fail_fast_init_default = bool(langmem_values.get("fail_fast_init", False))
 
     enabled = _parse_bool(os.environ.get("LLM_ENABLED"), enabled_default)
@@ -158,6 +160,9 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
     langmem_min_record_confidence = float(
         os.environ.get("LANGMEM_MIN_RECORD_CONFIDENCE", str(langmem_min_record_confidence_default))
     )
+    langmem_min_similarity_score = float(
+        os.environ.get("LANGMEM_MIN_SIMILARITY_SCORE", str(langmem_min_similarity_score_default))
+    )
     langmem_fail_fast_init = _parse_bool(
         os.environ.get("LANGMEM_FAIL_FAST_INIT"),
         langmem_fail_fast_init_default,
@@ -184,5 +189,6 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
         langmem_max_semantic_memories_per_namespace=langmem_max_semantic_memories_per_namespace,
         langmem_max_retrospective_memories=langmem_max_retrospective_memories,
         langmem_min_record_confidence=langmem_min_record_confidence,
+        langmem_min_similarity_score=langmem_min_similarity_score,
         langmem_fail_fast_init=langmem_fail_fast_init,
     )

@@ -81,7 +81,7 @@ class Game:
         init_run_logging(state_seed)
         self.__send_command("choose 0")
 
-    def _drain_stale_state_before_start(self, start_message: str, max_attempts: int = 20) -> None:
+    def _drain_stale_state_before_start(self, start_message: str, max_attempts: int = 40) -> None:
         """If the game is stuck mid-run from a previous crash, navigate back to a
         state where the ``start`` command is accepted."""
         start_verb = start_message.split()[0]
@@ -95,7 +95,8 @@ class Game:
         self.last_state = GameState(probe)
         for _ in range(max_attempts):
             for cmd in (Command.PROCEED, Command.SKIP, Command.CANCEL,
-                        Command.LEAVE, Command.CONFIRM):
+                        Command.LEAVE, Command.CONFIRM, Command.END,
+                        Command.WAIT):
                 if self.last_state.has_command(cmd):
                     self.__send_setup_command(cmd.value)
                     break
@@ -108,7 +109,10 @@ class Game:
             if start_verb in new_available or not self.last_state.json.get("in_game", False):
                 log_to_run("Drained stale state, ready for start")
                 return
-        log_to_run("Could not drain stale state after max attempts")
+        raise RuntimeError(
+            f"Could not drain stale game state after {max_attempts} attempts. "
+            f"Available commands: {self.last_state.json.get('available_commands', [])}"
+        )
 
     def _state_fingerprint(self) -> str:
         gs = self.last_state.game_state()

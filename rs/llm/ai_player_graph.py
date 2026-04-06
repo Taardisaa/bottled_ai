@@ -1068,18 +1068,8 @@ class AIPlayerGraph:
 
             normalized_command = str(proposed_command).strip()
             if self._should_require_choose_prefix(decision_context, normalized_command):
-                validation_feedback = {
-                    "code": "choose_requires_command_prefix",
-                    "message": (
-                        "Do not return only an index. Return a full legal command in the form "
-                        "'choose <index>'."
-                    ),
-                    "allowed_commands": [str(command) for command in decision_context.available_commands],
-                    "choice_list": [str(choice) for choice in decision_context.choice_list],
-                    "corrective_hint": "Example valid output: choose 0",
-                    "rejected_command": normalized_command,
-                }
-                continue
+                normalized_command = f"choose {normalized_command}"
+                proposal.proposed_command = normalized_command
 
             validation, feedback = validate_proposed_command(decision_context, normalized_command)
             if validation.is_valid:
