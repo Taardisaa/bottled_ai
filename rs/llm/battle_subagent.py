@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal, cast
 from uuid import uuid4
 
-from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
@@ -25,7 +25,7 @@ from rs.llm.battle_tools import (
 )
 from rs.llm.integration.battle_context import build_battle_agent_context, is_battle_scope_state
 from rs.llm.langmem_service import LangMemService, get_langmem_service
-from rs.llm.providers.battle_llm_provider import build_battle_prompt
+from rs.llm.providers.battle_llm_provider import build_battle_prompt, build_battle_state_update, build_battle_system_prompt
 from rs.llm.subagent_validation_middleware import validate_proposed_command
 from rs.machine.state import GameState
 
@@ -329,7 +329,7 @@ class BattleSubagent:
             except Exception:
                 working_memory["calculator_recommendation"] = []
 
-        # Normal path — reset messages for this turn and let agent decide
+        # Build messages — system prompt once, then state updates
         log_to_run(
             "BattleSubagent state ingest: "
             f"floor={context.game_state.get('floor', 'unknown')} | "
@@ -338,10 +338,23 @@ class BattleSubagent:
             f"commands={len(context.available_commands)} | "
             f"choices={len(context.choice_list)}"
         )
-        prompt = build_battle_prompt(context, working_memory)
-        existing_messages = state.get("messages", [])
-        removals = [RemoveMessage(id=m.id) for m in existing_messages if getattr(m, "id", None)]
-        new_message = HumanMessage(content=prompt)
+        is_first_ingest = not working_memory.get("has_ingested")
+        new_messages: list = []
+        if is_first_ingest:
+            new_messages.append(SystemMessage(content=build_battle_system_prompt(context, working_memory)))
+            working_memory["has_ingested"] = True
+        new_messages.append(HumanMessage(content=build_battle_state_update(context, working_memory)))
+
+        # Trim old messages if conversation grows too long (keep system + last N)
+        existing_messages = list(state.get("messages", []))
+        max_messages = 60
+        removals: list = []
+        if len(existing_messages) > max_messages:
+            to_remove = [
+                m for m in existing_messages[1:len(existing_messages) - max_messages + 1]
+                if getattr(m, "id", None) and not isinstance(m, SystemMessage)
+            ]
+            removals = [RemoveMessage(id=m.id) for m in to_remove]
 
         return {
             "current_state": current_state,
@@ -350,7 +363,7 @@ class BattleSubagent:
             "working_memory": working_memory,
             "battle_complete": battle_complete,
             "action_committed": False,
-            "messages": removals + [new_message],
+            "messages": removals + new_messages,
             "validation_attempt_count": 0,
             "skip_agent": False,
             "pending_commands": [],

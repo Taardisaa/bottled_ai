@@ -19,10 +19,24 @@ def is_battle_scope_state(state: GameState) -> bool:
     }
 
 
+def _query_card_description(name: str, upgrades: int, character_class: str = "") -> str:
+    try:
+        from stsdb import query_card
+        result = query_card(name, upgrade_times=upgrades, character_class=character_class)
+        if isinstance(result, dict) and result.get("found"):
+            desc = result.get("entry", {}).get("description", "")
+            if desc:
+                return str(desc)
+    except Exception:
+        pass
+    return ""
+
+
 def _build_hand_cards(state: GameState) -> list[dict[str, Any]]:
     if state.combat_state() is None:
         return []
 
+    character_class = state.game_state().get("character_class", "")
     summaries: list[dict[str, Any]] = []
     for index, card in enumerate(state.hand.cards, start=1):
         entry: dict[str, Any] = {
@@ -39,6 +53,9 @@ def _build_hand_cards(state: GameState) -> list[dict[str, Any]]:
             entry["ethereal"] = True
         if card.exhausts:
             entry["exhausts"] = True
+        desc = _query_card_description(card.name, card.upgrades, character_class)
+        if desc:
+            entry["description"] = desc
         summaries.append(entry)
     return summaries
 
