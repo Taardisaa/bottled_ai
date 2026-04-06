@@ -26,6 +26,7 @@ from rs.llm.battle_tools import (
 from rs.llm.integration.battle_context import build_battle_agent_context, is_battle_scope_state
 from rs.llm.langmem_service import LangMemService, get_langmem_service
 from rs.llm.providers.battle_llm_provider import build_battle_prompt, build_battle_state_update, build_battle_system_prompt
+from rs.llm.battle_command_normalizer import normalize_battle_command
 from rs.llm.subagent_validation_middleware import validate_proposed_command
 from rs.machine.state import GameState
 
@@ -435,6 +436,12 @@ class BattleSubagent:
         validation_attempt = int(state.get("validation_attempt_count", 0))
 
         commands = self._parse_submitted_commands(messages)
+
+        # Normalize LLM commands before validation
+        raw_commands = list(commands)
+        commands = [normalize_battle_command(cmd, context) for cmd in commands]
+        if commands != raw_commands:
+            log_to_run(f"BattleSubagent normalized commands: {raw_commands} → {commands}")
 
         # Enforce one-command-at-a-time: keep only the first command
         if len(commands) > 1:
