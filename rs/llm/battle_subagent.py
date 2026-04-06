@@ -302,6 +302,11 @@ class BattleSubagent:
             fallback_commands = self._build_guardrail_fallback_commands(
                 context, prefer_progression=True, rejected_batches=[last_batch] if last_batch else None
             )
+            log_to_run(
+                f"BattleSubagent no-progress guardrail triggered: "
+                f"count={no_progress_count} | signature={self._preview_log_text(current_signature, limit=96)} | "
+                f"fallback={fallback_commands}"
+            )
             working_memory = self._append_step_summary(
                 working_memory,
                 f"no-progress guardrail triggered after {no_progress_count} repeated signatures",
@@ -406,7 +411,7 @@ class BattleSubagent:
             f"reasoning={self._preview_log_text(reasoning, limit=-1)}"
         )
         if reasoning:
-            return {"messages": [AIMessage(content=reasoning)]}
+            return {"messages": [HumanMessage(content=f"Battle analysis:\n{reasoning}\n\nNow execute your plan by calling submit_battle_commands.")]}
         return {}
 
     def _agent_node(self, state: BattleSubagentState) -> dict[str, Any]:
@@ -890,6 +895,18 @@ class BattleSubagent:
             sorted(str(c).strip() for c in available_commands_raw if str(c).strip())
         ) if isinstance(available_commands_raw, list) else tuple()
         choice_list = tuple(str(choice).strip().lower() for choice in state.get_choice_list())
+        combat_state = state.combat_state() or {}
+        player = combat_state.get("player", {}) or {}
+        hand_ids = tuple(
+            str(card.get("uuid", card.get("id", "")))
+            for card in (combat_state.get("hand", []) or [])
+            if isinstance(card, dict)
+        )
+        monster_hps = tuple(
+            (str(m.get("name", "")), int(m.get("current_hp", 0)))
+            for m in state.get_monsters()
+            if isinstance(m, dict) and not m.get("is_gone", False)
+        )
         signature = (
             str(game_state.get("screen_type", "")),
             available_commands,
@@ -898,6 +915,11 @@ class BattleSubagent:
             bool(screen_state.get("can_pick_zero", False)),
             selected_marker,
             choice_list,
+            int(combat_state.get("turn", 0)),
+            int(player.get("energy", 0)),
+            int(game_state.get("current_hp", 0)),
+            hand_ids,
+            monster_hps,
         )
         return str(signature)
 

@@ -208,34 +208,29 @@ class TestBattleSubagentReal(unittest.TestCase):
         self.assertTrue(result.handled)
 
         # invoke_log[0] = think_node (bare model, gets SystemMessage + HumanMessage + HumanMessage("Analyse..."))
-        # invoke_log[1] = agent_node (model+tools, gets SystemMessage + HumanMessage + AIMessage from think)
+        # invoke_log[1] = agent_node (model+tools, gets SystemMessage + HumanMessage + HumanMessage("Battle analysis:..."))
         self.assertGreaterEqual(len(instrumented.invoke_log), 2)
 
         think_call = instrumented.invoke_log[0]
         agent_call = instrumented.invoke_log[1]
 
-        # Think call should NOT have any AIMessage (it's the first call)
-        think_ai = [m for m in think_call if isinstance(m, AIMessage)]
-        self.assertEqual(0, len(think_ai), "Think call should have no prior AIMessages")
-
-        # Agent call SHOULD have an AIMessage (the think_node's reasoning output)
-        agent_ai = [
-            m for m in agent_call
-            if isinstance(m, AIMessage) and not getattr(m, "tool_calls", [])
-        ]
-        self.assertGreaterEqual(
-            len(agent_ai), 1,
-            "Agent call should contain think_node's text-only AIMessage as context"
-        )
-        # The reasoning should be non-trivial text
-        reasoning_text = agent_ai[0].content
-        if isinstance(reasoning_text, list):
-            reasoning_text = " ".join(
-                str(b.get("text", "")) for b in reasoning_text if isinstance(b, dict)
-            )
+        # Agent call should have more HumanMessages than think call (the analysis was injected)
+        think_human = [m for m in think_call if isinstance(m, HumanMessage)]
+        agent_human = [m for m in agent_call if isinstance(m, HumanMessage)]
         self.assertGreater(
-            len(str(reasoning_text).strip()), 10,
-            f"Think reasoning should be substantive, got: {reasoning_text!r}"
+            len(agent_human), len(think_human),
+            "Agent call should contain think_node's analysis as an additional HumanMessage"
+        )
+
+        # The last HumanMessage in agent call should contain the battle analysis
+        analysis_msg = agent_human[-1]
+        self.assertIn(
+            "Battle analysis:", analysis_msg.content,
+            "Agent call should contain 'Battle analysis:' HumanMessage from think_node"
+        )
+        self.assertIn(
+            "submit_battle_commands", analysis_msg.content,
+            "Analysis message should prompt the agent to execute via submit_battle_commands"
         )
 
 
