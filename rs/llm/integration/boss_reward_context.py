@@ -4,6 +4,7 @@ from typing import Any
 
 from rs.game.screen_type import ScreenType
 from rs.llm.agents.base_agent import AgentContext
+from rs.llm.integration.stsdb_enrichment import enrich_relic_names, query_relic_description
 from rs.llm.run_context import get_current_agent_identity
 from rs.llm.state_summary_cache import get_cached_run_summary
 from rs.machine.state import GameState
@@ -36,12 +37,16 @@ def _build_boss_relic_options(state: GameState) -> tuple[list[dict[str, Any]], b
         screen_name = _normalize_relic_name(screen_relic.get("name"))
         if screen_name and choice_name and screen_name != choice_name:
             mismatch = True
-        options.append({
+        option: dict[str, Any] = {
             "choice_index": index,
             "choice_name": choice_name,
             "screen_relic_name": screen_name,
             "screen_relic_id": str(screen_relic.get("id", "")).strip(),
-        })
+        }
+        desc = query_relic_description(screen_name or choice_name)
+        if desc:
+            option["description"] = desc
+        options.append(option)
     return options, mismatch
 
 
@@ -78,6 +83,7 @@ def build_boss_reward_agent_context(state: GameState, handler_name: str) -> Agen
             "deck_profile": run_summary["deck_profile"],
             "deck_card_entries": run_summary["deck_card_entries"],
             "relic_names": run_summary["relic_names"],
+            "relic_summaries": enrich_relic_names(run_summary["relic_names"]),
             "held_potion_names": run_summary["held_potion_names"],
             "potions_full": run_summary["potions_full"],
             "run_memory_summary": run_summary["run_memory_summary"],

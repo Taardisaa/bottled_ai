@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from rs.llm.agents.base_agent import AgentContext
+from rs.llm.integration.stsdb_enrichment import enrich_relic_names
 from rs.llm.run_context import get_current_agent_identity
 from rs.llm.state_summary_cache import get_cached_run_summary
 from rs.machine.state import GameState
@@ -60,6 +61,7 @@ def build_card_reward_agent_context(state: GameState, handler_name: str) -> Agen
             "agent_identity": get_current_agent_identity(),
             "deck_size": run_summary["deck_size"],
             "relic_names": run_summary["relic_names"],
+            "relic_summaries": enrich_relic_names(run_summary["relic_names"]),
             "held_potion_names": run_summary["held_potion_names"],
             "potions_full": run_summary["potions_full"],
             "deck_card_name_counts": run_summary["deck_card_name_counts"],

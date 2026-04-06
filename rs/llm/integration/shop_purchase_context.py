@@ -3,6 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from rs.llm.agents.base_agent import AgentContext
+from rs.llm.integration.stsdb_enrichment import (
+    enrich_relic_names,
+    query_card_description,
+    query_potion_description,
+    query_relic_description,
+)
 from rs.llm.run_context import get_current_agent_identity
 from rs.llm.state_summary_cache import get_cached_run_summary
 from rs.machine.state import GameState
@@ -18,7 +24,7 @@ def _build_shop_offer_summaries(screen_state: dict[str, Any]) -> dict[str, list[
         for card in cards:
             if not isinstance(card, dict):
                 continue
-            card_summaries.append({
+            entry: dict[str, Any] = {
                 "name": str(card.get("name", "")).strip().lower(),
                 "type": card.get("type"),
                 "rarity": card.get("rarity"),
@@ -26,28 +32,40 @@ def _build_shop_offer_summaries(screen_state: dict[str, Any]) -> dict[str, list[
                 "price": card.get("price"),
                 "upgrades": card.get("upgrades", 0),
                 "exhausts": bool(card.get("exhausts", False)),
-            })
+            }
+            desc = query_card_description(entry["name"], entry["upgrades"])
+            if desc:
+                entry["description"] = desc
+            card_summaries.append(entry)
 
     relic_summaries: list[dict[str, Any]] = []
     if isinstance(relics, list):
         for relic in relics:
             if not isinstance(relic, dict):
                 continue
-            relic_summaries.append({
+            relic_entry: dict[str, Any] = {
                 "name": str(relic.get("name", "")).strip(),
                 "price": relic.get("price"),
-            })
+            }
+            rdesc = query_relic_description(relic_entry["name"])
+            if rdesc:
+                relic_entry["description"] = rdesc
+            relic_summaries.append(relic_entry)
 
     potion_summaries: list[dict[str, Any]] = []
     if isinstance(potions, list):
         for potion in potions:
             if not isinstance(potion, dict):
                 continue
-            potion_summaries.append({
+            potion_entry: dict[str, Any] = {
                 "name": str(potion.get("name", "")).strip(),
                 "price": potion.get("price"),
                 "requires_target": bool(potion.get("requires_target", False)),
-            })
+            }
+            pdesc = query_potion_description(potion_entry["name"])
+            if pdesc:
+                potion_entry["description"] = pdesc
+            potion_summaries.append(potion_entry)
 
     return {
         "cards": card_summaries,
@@ -89,6 +107,7 @@ def build_shop_purchase_agent_context(state: GameState, handler_name: str) -> Ag
             "deck_size": run_summary["deck_size"],
             "deck_profile": run_summary["deck_profile"],
             "relic_names": run_summary["relic_names"],
+            "relic_summaries": enrich_relic_names(run_summary["relic_names"]),
             "held_potion_names": run_summary["held_potion_names"],
             "potions_full": run_summary["potions_full"],
             "run_memory_summary": run_summary["run_memory_summary"],

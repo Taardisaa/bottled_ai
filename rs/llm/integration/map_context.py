@@ -9,6 +9,7 @@ from rs.game.map import Map
 from rs.game.path import PathHandlerConfig
 from rs.game.room import RoomType
 from rs.llm.agents.base_agent import AgentContext
+from rs.llm.integration.stsdb_enrichment import enrich_relic_names
 from rs.llm.run_context import get_current_agent_identity
 from rs.llm.state_summary_cache import get_cached_run_summary
 from rs.machine.state import GameState
@@ -463,6 +464,7 @@ def build_map_agent_context(
             "agent_identity": get_current_agent_identity(),
             "deck_profile": compact_deck_profile,
             "relic_names": run_summary["relic_names"],
+            "relic_summaries": enrich_relic_names(run_summary["relic_names"]),
             "held_potion_names": run_summary["held_potion_names"],
             "potions_full": run_summary["potions_full"],
             "run_memory_summary": run_summary["run_memory_summary"],

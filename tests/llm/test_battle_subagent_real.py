@@ -239,5 +239,162 @@ class TestBattleSubagentReal(unittest.TestCase):
         )
 
 
+class TestStsdbDescriptionsInPipeline(unittest.TestCase):
+    """Verify that stsdb descriptions for cards, potions, relics, and powers
+    flow through the context building into the actual LLM prompt."""
+
+    def _build_rich_state(self):
+        """Build a GameState with hand cards, monsters with powers, potions, and relics."""
+        import json
+        base = json.load(open("tests/res/battles/general/breaks_when_no_monsters_alive_but_not_won.json"))
+        # This fixture already has relics and a potion; it also has a real combat_state
+        return load_resource_state("battles/general/breaks_when_no_monsters_alive_but_not_won.json")
+
+    def test_hand_cards_have_descriptions(self):
+        from rs.llm.integration.battle_context import build_battle_agent_context
+        state = self._build_rich_state()
+        context = build_battle_agent_context(state, "BattleHandler")
+        hand = context.extras.get("hand_cards", [])
+        if not hand:
+            self.skipTest("Fixture has no hand cards")
+        cards_with_desc = [c for c in hand if c.get("description")]
+        self.assertGreater(
+            len(cards_with_desc), 0,
+            f"At least one hand card should have a stsdb description, got: {hand}"
+        )
+
+    def test_relic_summaries_have_descriptions(self):
+        from rs.llm.integration.battle_context import build_battle_agent_context
+        state = self._build_rich_state()
+        context = build_battle_agent_context(state, "BattleHandler")
+        relics = context.extras.get("relic_summaries", [])
+        self.assertGreater(len(relics), 0, "Fixture should have relics")
+        relics_with_desc = [r for r in relics if r.get("description")]
+        self.assertGreater(
+            len(relics_with_desc), 0,
+            f"At least one relic should have a stsdb description, got: {relics}"
+        )
+        # Spot check a known relic
+        pure_water = [r for r in relics if r["name"] == "Pure Water"]
+        if pure_water:
+            self.assertIn("Miracle", pure_water[0]["description"])
+
+    def test_potion_summaries_have_descriptions(self):
+        from rs.llm.integration.battle_context import build_battle_agent_context
+        state = self._build_rich_state()
+        context = build_battle_agent_context(state, "BattleHandler")
+        potions = context.extras.get("potion_summaries", [])
+        if not potions:
+            self.skipTest("Fixture has no potions")
+        potions_with_desc = [p for p in potions if p.get("description")]
+        self.assertGreater(
+            len(potions_with_desc), 0,
+            f"At least one potion should have a stsdb description, got: {potions}"
+        )
+
+    def test_player_powers_have_descriptions(self):
+        from rs.llm.integration.battle_context import build_battle_agent_context
+        state = self._build_rich_state()
+        context = build_battle_agent_context(state, "BattleHandler")
+        powers = context.extras.get("player_powers", [])
+        if not powers:
+            self.skipTest("Fixture has no player powers")
+        powers_with_desc = [p for p in powers if p.get("description")]
+        self.assertGreater(
+            len(powers_with_desc), 0,
+            f"At least one player power should have a stsdb description, got: {powers}"
+        )
+
+    def test_monster_powers_have_descriptions(self):
+        from rs.llm.integration.battle_context import build_battle_agent_context
+        state = self._build_rich_state()
+        context = build_battle_agent_context(state, "BattleHandler")
+        monsters = context.extras.get("monster_summaries", [])
+        if not monsters:
+            self.skipTest("Fixture has no monsters")
+        all_powers = [p for m in monsters for p in m.get("powers", [])]
+        if not all_powers:
+            self.skipTest("Fixture monsters have no powers")
+        powers_with_desc = [p for p in all_powers if p.get("description")]
+        self.assertGreater(
+            len(powers_with_desc), 0,
+            f"At least one monster power should have a stsdb description, got: {all_powers}"
+        )
+
+    def test_descriptions_reach_system_prompt_in_real_pipeline(self):
+        """Verify relic descriptions appear in the SystemMessage sent to the LLM."""
+        preflight = run_llm_preflight_check(model=llm_runtime_config.fast_llm_model)
+        if not preflight.available:
+            self.skipTest(f"LLM backend not reachable: {preflight.error}")
+
+        inner_model = _build_chat_model()
+        instrumented = _InstrumentedChatModel(inner_model)
+
+        langmem = FakeLangMemService()
+        subagent = BattleSubagent(
+            chat_model=instrumented,
+            langmem_service=langmem,
+            config=BattleSubagentConfig(
+                max_decision_loops=16,
+                max_tool_calls=16,
+                fallback_max_path_count=100,
+            ),
+        )
+
+        initial_state = load_resource_state("battles/general/breaks_when_no_monsters_alive_but_not_won.json")
+        final_state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeBattleRuntime(initial_state, [final_state])
+
+        result = subagent.run(initial_state, runtime)
+
+        # Check the SystemMessage in the first invoke call for relic descriptions
+        self.assertGreater(len(instrumented.invoke_log), 0)
+        first_call = instrumented.invoke_log[0]
+        system_msgs = [m for m in first_call if isinstance(m, SystemMessage)]
+        self.assertEqual(1, len(system_msgs))
+        system_content = system_msgs[0].content
+
+        # The fixture has "Pure Water" relic — its description should be in the system prompt
+        self.assertIn("Pure Water", system_content, "Relic name should appear in system prompt")
+        self.assertIn("Miracle", system_content, "Pure Water's description mentions Miracle")
+
+    def test_descriptions_reach_state_update_in_real_pipeline(self):
+        """Verify card/power descriptions appear in HumanMessage state updates."""
+        preflight = run_llm_preflight_check(model=llm_runtime_config.fast_llm_model)
+        if not preflight.available:
+            self.skipTest(f"LLM backend not reachable: {preflight.error}")
+
+        inner_model = _build_chat_model()
+        instrumented = _InstrumentedChatModel(inner_model)
+
+        langmem = FakeLangMemService()
+        subagent = BattleSubagent(
+            chat_model=instrumented,
+            langmem_service=langmem,
+            config=BattleSubagentConfig(
+                max_decision_loops=16,
+                max_tool_calls=16,
+                fallback_max_path_count=100,
+            ),
+        )
+
+        initial_state = load_resource_state("battles/general/breaks_when_no_monsters_alive_but_not_won.json")
+        final_state = load_resource_state("/card_reward/card_reward_take.json")
+        runtime = FakeBattleRuntime(initial_state, [final_state])
+
+        result = subagent.run(initial_state, runtime)
+
+        # Find HumanMessages containing state updates
+        self.assertGreater(len(instrumented.invoke_log), 0)
+        first_call = instrumented.invoke_log[0]
+        human_msgs = [m for m in first_call if isinstance(m, HumanMessage)]
+        self.assertGreater(len(human_msgs), 0)
+
+        # The state update should contain "description" fields from stsdb
+        state_content = human_msgs[0].content
+        self.assertIn("description", state_content,
+                       "State update should contain stsdb description fields for cards/powers")
+
+
 if __name__ == "__main__":
     unittest.main()

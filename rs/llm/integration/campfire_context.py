@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from rs.llm.agents.base_agent import AgentContext
+from rs.llm.integration.stsdb_enrichment import enrich_card_entries, enrich_relic_names
 from rs.llm.run_context import get_current_agent_identity
 from rs.llm.state_summary_cache import get_cached_run_summary
 from rs.machine.state import GameState
@@ -72,8 +73,9 @@ def build_campfire_agent_context(state: GameState, handler_name: str) -> AgentCo
             "agent_identity": get_current_agent_identity(),
             "deck_size": run_summary["deck_size"],
             "deck_profile": run_summary["deck_profile"],
-            "deck_card_entries": run_summary["deck_card_entries"],
+            "deck_card_entries": enrich_card_entries(run_summary["deck_card_entries"], game_state.get("class", "")),
             "relic_names": run_summary["relic_names"],
+            "relic_summaries": enrich_relic_names(run_summary["relic_names"]),
             "held_potion_names": run_summary["held_potion_names"],
             "run_memory_summary": run_summary["run_memory_summary"],
             "campfire_options": _build_campfire_options(choice_list),

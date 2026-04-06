@@ -19,17 +19,16 @@ def is_battle_scope_state(state: GameState) -> bool:
     }
 
 
+from rs.llm.integration.stsdb_enrichment import (
+    enrich_powers,
+    enrich_relic_names,
+    query_card_description,
+    query_potion_description,
+)
+
+
 def _query_card_description(name: str, upgrades: int, character_class: str = "") -> str:
-    try:
-        from stsdb import query_card
-        result = query_card(name, upgrade_times=upgrades, character_class=character_class)
-        if isinstance(result, dict) and result.get("found"):
-            desc = result.get("entry", {}).get("description", "")
-            if desc:
-                return str(desc)
-    except Exception:
-        pass
-    return ""
+    return query_card_description(name, upgrades, character_class)
 
 
 def _build_hand_cards(state: GameState) -> list[dict[str, Any]]:
@@ -118,12 +117,13 @@ def _build_monster_summaries(state: GameState) -> list[dict[str, Any]]:
             entry["block"] = block
         powers = monster.get("powers", [])
         if powers:
-            entry["powers"] = [
-                {"name": p.get("name"), "amount": p.get("amount")}
-                for p in powers if isinstance(p, dict)
-            ]
+            entry["powers"] = _enrich_powers(powers)
         summaries.append(entry)
     return summaries
+
+
+_enrich_powers = enrich_powers
+_build_relic_summaries = enrich_relic_names
 
 
 def _build_potion_summaries(state: GameState) -> list[dict[str, Any]]:
@@ -131,10 +131,14 @@ def _build_potion_summaries(state: GameState) -> list[dict[str, Any]]:
     for index, potion in enumerate(state.get_potions()):
         if str(potion.get("id", "")).strip() == "Potion Slot":
             continue
-        summaries.append({
+        entry: dict[str, Any] = {
             "slot_index": index,
             "name": potion.get("name"),
-        })
+        }
+        desc = query_potion_description(potion.get("name", ""))
+        if desc:
+            entry["description"] = desc
+        summaries.append(entry)
     return summaries
 
 
@@ -186,6 +190,7 @@ def build_battle_agent_context(
             "deck_profile": run_summary["deck_profile"],
             "deck_card_name_counts": run_summary["deck_card_name_counts"],
             "relic_names": run_summary["relic_names"],
+            "relic_summaries": _build_relic_summaries(run_summary["relic_names"]),
             "held_potion_names": run_summary["held_potion_names"],
             "potions_full": run_summary["potions_full"],
             "run_memory_summary": run_summary["run_memory_summary"],
@@ -205,11 +210,9 @@ def build_battle_agent_context(
             "potion_summaries": potion_summaries,
             "player_energy": combat_state.get("player", {}).get("energy"),
             "player_block": combat_state.get("player", {}).get("block"),
-            "player_powers": [
-                {"name": p.get("name"), "amount": p.get("amount")}
-                for p in (combat_state.get("player", {}).get("powers", []) or [])
-                if isinstance(p, dict)
-            ],
+            "player_powers": _enrich_powers(
+                combat_state.get("player", {}).get("powers", []) or []
+            ),
             "screen_state": state.screen_state(),
             "game_state_ref": state,
             "battle_runtime": runtime,

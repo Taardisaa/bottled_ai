@@ -118,6 +118,15 @@ def build_battle_system_prompt(context: AgentContext, working_memory: dict[str, 
     parts = [_SYSTEM_PROMPT]
     if context_parts:
         parts.append("\nBattle context:\n" + " | ".join(context_parts))
+
+    relic_summaries = context.extras.get("relic_summaries", [])
+    if relic_summaries:
+        relic_lines = [
+            f"- {r['name']}: {r['description']}" if r.get("description") else f"- {r['name']}"
+            for r in relic_summaries
+        ]
+        parts.append("\nRelics:\n" + "\n".join(relic_lines))
+
     return "\n".join(parts)
 
 
