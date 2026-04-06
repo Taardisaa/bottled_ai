@@ -23,7 +23,7 @@ Rules:
 - For play commands, use "play <hand_index> [target_index]".
 - For hand-select or grid screens, use "choose <index>" and include "confirm" / "wait 30" when needed.
 - Submit exactly ONE command at a time via submit_battle_commands. After each command, you will receive updated state. Only submit "end" when you have no more playable cards for your remaining energy.
-- Before each tool call, briefly state: what you observe (enemy HP, intent, your hand), what you plan to do, and why. Keep it to 1-3 sentences.
+- When calling submit_battle_commands, always include a "reasoning" argument: briefly state what you observe (enemy HP, intent, your hand), what you chose, and why.
 
 Current battle state:
 {battle_payload}

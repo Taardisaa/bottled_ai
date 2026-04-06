@@ -365,7 +365,7 @@ class BattleSubagent:
         log_to_run(
             f"[TIMING] BattleSubagent._agent_node LLM call took {_elapsed_ms:.0f}ms | "
             f"tool_calls={tool_call_names or ['none']} | "
-            f"content={self._preview_log_text(self._extract_explanation([response]))}"
+            f"content={self._preview_log_text(self._extract_explanation([response]), limit=-1)}"
         )
         return {"messages": [response]}
 
@@ -426,7 +426,7 @@ class BattleSubagent:
                 log_to_run(
                     "BattleSubagent accepted submission: "
                     f"commands={commands} | "
-                    f"explanation={self._preview_log_text(explanation)}"
+                    f"explanation={self._preview_log_text(explanation, limit=-1)}"
                 )
                 return {
                     "pending_commands": commands,
@@ -778,15 +778,24 @@ class BattleSubagent:
         for message in reversed(messages):
             if not isinstance(message, AIMessage):
                 continue
+            # Try reasoning from submit_battle_commands tool call args first
+            for tc in getattr(message, "tool_calls", []):
+                if tc.get("name") == "submit_battle_commands":
+                    reasoning = str(tc.get("args", {}).get("reasoning", "")).strip()
+                    if reasoning:
+                        return reasoning
+            # Fall back to message content (skip raw <tool_call> XML)
             content = message.content
-            if isinstance(content, str) and content.strip():
-                return content.strip()[:200]
+            if isinstance(content, str):
+                text = content.strip()
+                if text and not text.startswith("<tool_call>"):
+                    return text
             if isinstance(content, list):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "text":
                         text = str(block.get("text", "")).strip()
-                        if text:
-                            return text[:200]
+                        if text and not text.startswith("<tool_call>"):
+                            return text
         return "battle_subagent_step"
 
     @staticmethod

@@ -181,9 +181,14 @@ def validate_battle_command(commands: list[str], state: Annotated[dict, Injected
 
 
 @tool
-def submit_battle_commands(commands: list[str]) -> str:
+def submit_battle_commands(commands: list[str], reasoning: str = "") -> str:
     """Submit the final command batch to execute in battle.
-    Call this once you are confident in your decision. Do not call other tools after this."""
+    Call this once you are confident in your decision. Do not call other tools after this.
+
+    Args:
+        commands: The command(s) to execute.
+        reasoning: Brief explanation of your decision (what you observed, what you chose, and why).
+    """
     return "submitted"
 
 
