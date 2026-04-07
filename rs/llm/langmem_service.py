@@ -242,9 +242,10 @@ class MemoryRecord:
     updated_at_utc: str
     tags: tuple[str, ...]
     kind: str = "Memory"
+    importance: float | None = None
 
     def to_store_value(self) -> dict[str, Any]:
-        return {
+        result = {
             "kind": self.kind,
             "content": self.content,
             "memory_type": self.memory_type,
@@ -254,6 +255,9 @@ class MemoryRecord:
             "updated_at_utc": self.updated_at_utc,
             "tags": list(self.tags),
         }
+        if self.importance is not None:
+            result["importance"] = self.importance
+        return result
 
 
 class LangMemRepository:
@@ -291,6 +295,12 @@ class LangMemRepository:
                 ON langmem_records(namespace_json, memory_type, updated_at_utc)
                 """
             )
+            try:
+                connection.execute(
+                    "ALTER TABLE langmem_records ADD COLUMN importance REAL DEFAULT NULL"
+                )
+            except sqlite3.OperationalError:
+                pass  # column already exists
             connection.commit()
 
     def load_all(self) -> list[MemoryRecord]:
@@ -298,7 +308,8 @@ class LangMemRepository:
             rows = connection.execute(
                 """
                 SELECT memory_id, namespace_json, memory_type, content, source_run_id,
-                       handler_name, created_at_utc, updated_at_utc, tags_json, kind
+                       handler_name, created_at_utc, updated_at_utc, tags_json, kind,
+                       importance
                 FROM langmem_records
                 ORDER BY created_at_utc ASC
                 """
@@ -311,8 +322,9 @@ class LangMemRepository:
                 """
                 INSERT INTO langmem_records (
                     memory_id, namespace_json, memory_type, content, source_run_id,
-                    handler_name, created_at_utc, updated_at_utc, tags_json, kind
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    handler_name, created_at_utc, updated_at_utc, tags_json, kind,
+                    importance
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(memory_id) DO UPDATE SET
                     namespace_json=excluded.namespace_json,
                     memory_type=excluded.memory_type,
@@ -322,7 +334,8 @@ class LangMemRepository:
                     created_at_utc=excluded.created_at_utc,
                     updated_at_utc=excluded.updated_at_utc,
                     tags_json=excluded.tags_json,
-                    kind=excluded.kind
+                    kind=excluded.kind,
+                    importance=excluded.importance
                 """,
                 (
                     record.memory_id,
@@ -335,6 +348,7 @@ class LangMemRepository:
                     record.updated_at_utc,
                     json.dumps(list(record.tags)),
                     record.kind,
+                    record.importance,
                 ),
             )
             connection.commit()
@@ -350,7 +364,8 @@ class LangMemRepository:
             rows = connection.execute(
                 """
                 SELECT memory_id, namespace_json, memory_type, content, source_run_id,
-                       handler_name, created_at_utc, updated_at_utc, tags_json, kind
+                       handler_name, created_at_utc, updated_at_utc, tags_json, kind,
+                       importance
                 FROM langmem_records
                 WHERE namespace_json = ? AND memory_type = ?
                 ORDER BY updated_at_utc DESC, created_at_utc DESC
@@ -361,6 +376,8 @@ class LangMemRepository:
 
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> MemoryRecord:
+        raw_importance = row["importance"]
+        importance = float(raw_importance) if raw_importance is not None else None
         return MemoryRecord(
             memory_id=str(row["memory_id"]),
             namespace=tuple(json.loads(row["namespace_json"])),
@@ -372,6 +389,7 @@ class LangMemRepository:
             updated_at_utc=str(row["updated_at_utc"]),
             tags=tuple(json.loads(row["tags_json"])),
             kind=str(row["kind"]),
+            importance=importance,
         )
 
 
@@ -514,12 +532,18 @@ class LangMemService:
 
         inject_episodic = self._config.langmem_inject_episodic_memories
         inject_semantic = self._config.langmem_inject_semantic_memories
+        top_k = self._config.langmem_top_k
+        use_composite = self._config.langmem_importance_scoring_enabled
+        fetch_limit = top_k * 3 if use_composite else top_k
         with self._lock:
-            episodic_items = self._store.search(episodic_namespace, query=query, limit=self._config.langmem_top_k) if inject_episodic else []
-            semantic_items = self._store.search(semantic_namespace, query=query, limit=self._config.langmem_top_k) if inject_semantic else []
+            episodic_items = self._store.search(episodic_namespace, query=query, limit=top_k) if inject_episodic else []
+            semantic_items = self._store.search(semantic_namespace, query=query, limit=fetch_limit) if inject_semantic else []
             retrospective_items = self._store.search(
-                retrospective_namespace, query=query, limit=self._config.langmem_top_k
+                retrospective_namespace, query=query, limit=fetch_limit
             ) if inject_semantic else []
+        if use_composite:
+            semantic_items = self._rerank_by_composite_score(semantic_items)[:top_k]
+            retrospective_items = self._rerank_by_composite_score(retrospective_items)[:top_k]
         _elapsed_ms = (_time.perf_counter() - _t0) * 1000
         log_to_run(f"[TIMING] LangMem.build_context_memory handler={context.handler_name} took {_elapsed_ms:.0f}ms")
 
@@ -751,12 +775,17 @@ class LangMemService:
         if not final_puts:
             return
 
+        importance_model = self._build_importance_chat_model() if self._config.langmem_importance_scoring_enabled else None
         source_run_id = self._resolve_run_id(context)
         for put in final_puts:
             namespace = tuple(put["namespace"])
             key = str(put["key"])
             value = dict(put["value"])
             content = self._sanitize_reflection_content(_coerce_memory_content(value))
+            importance: float | None = None
+            if importance_model is not None:
+                importance = _score_importance_llm(content, importance_model, self._config.langmem_importance_default)
+                log_to_run(f"LangMem importance score: {importance:.0f} | {content[:80]}")
             now = _utc_now()
             record = MemoryRecord(
                 memory_id=key,
@@ -769,6 +798,7 @@ class LangMemService:
                 updated_at_utc=now,
                 tags=("semantic", trigger, context.handler_name),
                 kind=str(value.get("kind", "Memory")),
+                importance=importance,
             )
             raw_content = value.get("content")
             if isinstance(raw_content, dict) and "content" in raw_content:
@@ -824,11 +854,29 @@ class LangMemService:
             query_limit=self._config.langmem_top_k,
         )
 
+    def _build_importance_chat_model(self) -> Any:
+        from langchain_openai import ChatOpenAI as _ChatOpenAI
+        chat_base_url = llm_runtime_config.llm_base_url or llm_runtime_config.openai_base_url or None
+        chat_api_key = llm_runtime_config.llm_api_key or llm_runtime_config.openai_key or "langmem-importance"
+        reasoning_kwargs: dict[str, Any] = {}
+        if llm_runtime_config.llm_base_url:
+            reasoning_kwargs = {"extra_body": {"reasoning_effort": "none"}}
+        return _ChatOpenAI(
+            model=llm_runtime_config.fast_llm_model,
+            base_url=chat_base_url,
+            api_key=chat_api_key,
+            temperature=0.0,
+            max_tokens=5,
+            model_kwargs=reasoning_kwargs,
+        )
+
     def _prune_semantic_namespace(self, namespace: tuple[str, ...]) -> None:
         if self._repository is None:
             return
         semantic_records = self._repository.list_namespace(namespace, "semantic")
-        for record in semantic_records[self._config.langmem_max_semantic_memories_per_namespace:]:
+        limit = self._config.langmem_max_semantic_memories_per_namespace
+        to_prune = self._select_records_to_prune(semantic_records, limit)
+        for record in to_prune:
             self._repository.delete(record.memory_id)
             if self._store is not None:
                 self._store.delete(namespace, record.memory_id)
@@ -837,10 +885,26 @@ class LangMemService:
         if self._repository is None:
             return
         retro_records = self._repository.list_namespace(namespace, "semantic")
-        for record in retro_records[self._config.langmem_max_retrospective_memories:]:
+        limit = self._config.langmem_max_retrospective_memories
+        to_prune = self._select_records_to_prune(retro_records, limit)
+        for record in to_prune:
             self._repository.delete(record.memory_id)
             if self._store is not None:
                 self._store.delete(namespace, record.memory_id)
+
+    def _select_records_to_prune(self, records: list[MemoryRecord], limit: int) -> list[MemoryRecord]:
+        if len(records) <= limit:
+            return []
+        if self._config.langmem_importance_scoring_enabled:
+            # Sort ascending by (importance, recency) — low-importance old records first
+            default_imp = self._config.langmem_importance_default
+            sorted_records = sorted(
+                records,
+                key=lambda r: (r.importance if r.importance is not None else default_imp, r.updated_at_utc),
+            )
+            return sorted_records[:len(records) - limit]
+        # Default: list_namespace returns newest-first, so tail is oldest
+        return records[limit:]
 
     def _run_namespace(self, context: AgentContext) -> tuple[str, ...]:
         agent_identity = self._resolve_agent_identity(context)
@@ -899,6 +963,29 @@ class LangMemService:
         text = re.sub(r"  +", " ", text)           # multiple spaces
         return text.strip()
 
+    def _rerank_by_composite_score(self, items: list[SearchItem]) -> list[SearchItem]:
+        if not items:
+            return items
+        now = datetime.now(timezone.utc)
+        w_sim = self._config.langmem_composite_weight_similarity
+        w_imp = self._config.langmem_composite_weight_importance
+        w_rec = self._config.langmem_composite_weight_recency
+        decay_hours = self._config.langmem_recency_decay_hours
+        default_imp = self._config.langmem_importance_default
+
+        scored: list[tuple[float, int, SearchItem]] = []
+        for idx, item in enumerate(items):
+            similarity = item.score if item.score is not None else 0.0
+            importance = float(item.value.get("importance", default_imp))
+            normalized_importance = importance / 10.0
+            hours_elapsed = max(0.0, (now - item.updated_at).total_seconds() / 3600.0)
+            recency = 2.0 ** (-hours_elapsed / decay_hours) if decay_hours > 0 else 1.0
+            composite = w_sim * similarity + w_imp * normalized_importance + w_rec * recency
+            scored.append((composite, idx, item))
+
+        scored.sort(key=lambda t: t[0], reverse=True)
+        return [item for _, _, item in scored]
+
     def _format_search_results(self, items: list[SearchItem], source_tag: str) -> str:
         if not items:
             return "none"
@@ -908,12 +995,17 @@ class LangMemService:
         if not items:
             return "none"
 
+        show_importance = self._config.langmem_importance_scoring_enabled
         lines = []
         for item in items:
             score = item.score if item.score is not None else 0.0
             content = _coerce_memory_content(item.value)
             handler_name = str(item.value.get("handler_name", item.namespace[-1] if item.namespace else "memory"))
-            lines.append(f"[{source_tag}|match={score:.2f}|{handler_name}] {content}")
+            if show_importance:
+                importance = item.value.get("importance", self._config.langmem_importance_default)
+                lines.append(f"[{source_tag}|match={score:.2f}|imp={importance:.0f}|{handler_name}] {content}")
+            else:
+                lines.append(f"[{source_tag}|match={score:.2f}|{handler_name}] {content}")
         return " | ".join(lines)
 
     @staticmethod
@@ -954,6 +1046,32 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_IMPORTANCE_SCORING_PROMPT = """Rate the strategic importance of this Slay the Spire memory on a scale of 1-10.
+
+1-3: Generic advice that applies to almost any situation (e.g., "block when enemies attack", "play cards efficiently")
+4-6: Moderately specific strategic guidance (e.g., "upgrade damage cards in Act 1", "avoid long fights with scaling enemies")
+7-10: Highly specific, actionable intelligence about particular enemies, cards, or interactions
+      (e.g., "Gremlin Nob gains Strength when you play Skills — only use Attacks against it")
+
+Memory: {content}
+
+Respond with ONLY a single integer 1-10."""
+
+
+def _score_importance_llm(content: str, chat_model: Any, default: float = 5.0) -> float:
+    """Rate memory importance using a fast LLM call."""
+    try:
+        prompt = _IMPORTANCE_SCORING_PROMPT.format(content=content)
+        response = chat_model.invoke([HumanMessage(content=prompt)])
+        text = str(response.content).strip()
+        match = re.search(r'\b(\d+)\b', text)
+        if match:
+            return float(max(1, min(10, int(match.group(1)))))
+    except Exception:
+        pass
+    return default
+
+
 def _build_store_value(record: MemoryRecord, raw_content: Any | None = None) -> dict[str, Any]:
     stored_content = raw_content
     if stored_content is None:
@@ -961,7 +1079,7 @@ def _build_store_value(record: MemoryRecord, raw_content: Any | None = None) -> 
             stored_content = {"content": record.content}
         else:
             stored_content = record.content
-    return {
+    result = {
         "kind": record.kind,
         "content": stored_content,
         "memory_type": record.memory_type,
@@ -971,6 +1089,9 @@ def _build_store_value(record: MemoryRecord, raw_content: Any | None = None) -> 
         "updated_at_utc": record.updated_at_utc,
         "tags": list(record.tags),
     }
+    if record.importance is not None:
+        result["importance"] = record.importance
+    return result
 
 
 def _repair_ai_message_tool_calls(message: AIMessage) -> AIMessage:

@@ -38,6 +38,12 @@ class LlmConfig:
     langmem_min_similarity_score: float = 0.65
     langmem_max_reflection_workers: int = 3
     langmem_fail_fast_init: bool = False
+    langmem_importance_scoring_enabled: bool = False
+    langmem_importance_default: float = 5.0
+    langmem_composite_weight_similarity: float = 1.0
+    langmem_composite_weight_importance: float = 1.0
+    langmem_composite_weight_recency: float = 0.5
+    langmem_recency_decay_hours: float = 168.0
     battle_potion_allowed_room_types: List[str] = field(
         default_factory=lambda: ["MonsterRoomElite", "MonsterRoomBoss"]
     )
@@ -126,6 +132,22 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
     langmem_min_similarity_score_default = float(langmem_values.get("min_similarity_score", 0.65))
     langmem_max_reflection_workers_default = int(langmem_values.get("max_reflection_workers", 3))
     langmem_fail_fast_init_default = bool(langmem_values.get("fail_fast_init", False))
+    langmem_importance_scoring_enabled_default = bool(
+        langmem_values.get("importance_scoring_enabled", False)
+    )
+    langmem_importance_default_default = float(langmem_values.get("importance_default", 5.0))
+    langmem_composite_weight_similarity_default = float(
+        langmem_values.get("composite_weight_similarity", 1.0)
+    )
+    langmem_composite_weight_importance_default = float(
+        langmem_values.get("composite_weight_importance", 1.0)
+    )
+    langmem_composite_weight_recency_default = float(
+        langmem_values.get("composite_weight_recency", 0.5)
+    )
+    langmem_recency_decay_hours_default = float(
+        langmem_values.get("recency_decay_hours", 168.0)
+    )
     battle_potion_allowed_room_types_default = list(
         values.get("battle_potion_allowed_room_types", ["MonsterRoomElite", "MonsterRoomBoss"])
     )
@@ -194,6 +216,25 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
         os.environ.get("LANGMEM_FAIL_FAST_INIT"),
         langmem_fail_fast_init_default,
     )
+    langmem_importance_scoring_enabled = _parse_bool(
+        os.environ.get("LANGMEM_IMPORTANCE_SCORING_ENABLED"),
+        langmem_importance_scoring_enabled_default,
+    )
+    langmem_importance_default = float(
+        os.environ.get("LANGMEM_IMPORTANCE_DEFAULT", str(langmem_importance_default_default))
+    )
+    langmem_composite_weight_similarity = float(
+        os.environ.get("LANGMEM_COMPOSITE_WEIGHT_SIMILARITY", str(langmem_composite_weight_similarity_default))
+    )
+    langmem_composite_weight_importance = float(
+        os.environ.get("LANGMEM_COMPOSITE_WEIGHT_IMPORTANCE", str(langmem_composite_weight_importance_default))
+    )
+    langmem_composite_weight_recency = float(
+        os.environ.get("LANGMEM_COMPOSITE_WEIGHT_RECENCY", str(langmem_composite_weight_recency_default))
+    )
+    langmem_recency_decay_hours = float(
+        os.environ.get("LANGMEM_RECENCY_DECAY_HOURS", str(langmem_recency_decay_hours_default))
+    )
 
     return LlmConfig(
         enabled=enabled,
@@ -221,5 +262,11 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
         langmem_min_similarity_score=langmem_min_similarity_score,
         langmem_max_reflection_workers=langmem_max_reflection_workers,
         langmem_fail_fast_init=langmem_fail_fast_init,
+        langmem_importance_scoring_enabled=langmem_importance_scoring_enabled,
+        langmem_importance_default=langmem_importance_default,
+        langmem_composite_weight_similarity=langmem_composite_weight_similarity,
+        langmem_composite_weight_importance=langmem_composite_weight_importance,
+        langmem_composite_weight_recency=langmem_composite_weight_recency,
+        langmem_recency_decay_hours=langmem_recency_decay_hours,
         battle_potion_allowed_room_types=battle_potion_allowed_room_types_default,
     )

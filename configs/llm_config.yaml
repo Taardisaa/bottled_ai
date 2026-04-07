@@ -27,3 +27,9 @@ langmem:
   min_record_confidence: 0.4
   min_similarity_score: 0.75
   fail_fast_init: true
+  importance_scoring_enabled: true
+  importance_default: 5.0
+  composite_weight_similarity: 1.0
+  composite_weight_importance: 1.0
+  composite_weight_recency: 0.5
+  recency_decay_hours: 168.0

@@ -1266,5 +1266,148 @@ class TestSimilarityThresholdFiltering(unittest.TestCase):
                     self.assertGreaterEqual(score, 0.50, f"Score {score} below threshold 0.50")
 
 
+    def test_composite_rerank_promotes_high_importance(self):
+        from datetime import datetime, timezone
+        from langgraph.store.base import SearchItem
+
+        config = LlmConfig(
+            enabled=True,
+            langmem_enabled=True,
+            langmem_importance_scoring_enabled=True,
+            langmem_composite_weight_similarity=1.0,
+            langmem_composite_weight_importance=1.0,
+            langmem_composite_weight_recency=0.0,
+        )
+        service = LangMemService(config=config, embeddings_client=FakeEmbeddings())
+        now = datetime.now(timezone.utc)
+        items = [
+            SearchItem(namespace=("test",), key="generic", value={"content": "block when attacked", "handler_name": "B", "importance": 2.0}, created_at=now, updated_at=now, score=0.90),
+            SearchItem(namespace=("test",), key="specific", value={"content": "Nob punishes skills", "handler_name": "B", "importance": 9.0}, created_at=now, updated_at=now, score=0.70),
+        ]
+        reranked = service._rerank_by_composite_score(items)
+        self.assertEqual("specific", reranked[0].key)
+        self.assertEqual("generic", reranked[1].key)
+
+    def test_pruning_evicts_low_importance_first(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            from rs.llm.langmem_service import MemoryRecord, _utc_now
+
+            config = LlmConfig(
+                enabled=True,
+                langmem_enabled=True,
+                langmem_sqlite_path=str(Path(tmp) / "memory.sqlite3"),
+                langmem_importance_scoring_enabled=True,
+                langmem_max_semantic_memories_per_namespace=2,
+            )
+            repo = LangMemRepository(config.langmem_sqlite_path)
+            service = LangMemService(
+                config=config,
+                repository=repo,
+                embeddings_client=FakeEmbeddings(),
+            )
+
+            now = _utc_now()
+            ns = ("semantic", "test", "IRONCLAD", "BattleHandler")
+            for imp, key in [(3.0, "low"), (7.0, "mid"), (9.0, "high")]:
+                repo.upsert(MemoryRecord(
+                    memory_id=key, namespace=ns, memory_type="semantic",
+                    content=f"memory {key}", source_run_id="test:1",
+                    handler_name="BattleHandler", created_at_utc=now,
+                    updated_at_utc=now, tags=("semantic",), importance=imp,
+                ))
+
+            service._prune_semantic_namespace(ns)
+            remaining = repo.list_namespace(ns, "semantic")
+            remaining_ids = {r.memory_id for r in remaining}
+            self.assertEqual(2, len(remaining))
+            self.assertIn("high", remaining_ids)
+            self.assertIn("mid", remaining_ids)
+            self.assertNotIn("low", remaining_ids)
+
+    def test_sqlite_migration_adds_importance_column(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = str(Path(tmp) / "memory.sqlite3")
+            # Create old-schema DB without importance column
+            conn = sqlite3.connect(db_path)
+            conn.execute("""
+                CREATE TABLE langmem_records (
+                    memory_id TEXT PRIMARY KEY,
+                    namespace_json TEXT NOT NULL,
+                    memory_type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    source_run_id TEXT NOT NULL,
+                    handler_name TEXT NOT NULL,
+                    created_at_utc TEXT NOT NULL,
+                    updated_at_utc TEXT NOT NULL,
+                    tags_json TEXT NOT NULL,
+                    kind TEXT NOT NULL
+                )
+            """)
+            conn.commit()
+            conn.close()
+
+            # LangMemRepository should migrate the schema
+            repo = LangMemRepository(db_path)
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("PRAGMA table_info(langmem_records)")
+            columns = {row["name"] for row in cursor.fetchall()}
+            conn.close()
+            self.assertIn("importance", columns)
+
+    def test_importance_default_when_scoring_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config = LlmConfig(
+                enabled=True,
+                langmem_enabled=True,
+                langmem_sqlite_path=str(Path(tmp) / "memory.sqlite3"),
+                langmem_importance_scoring_enabled=False,
+            )
+            repo = LangMemRepository(config.langmem_sqlite_path)
+            service = LangMemService(
+                config=config,
+                repository=repo,
+                embeddings_client=FakeEmbeddings(),
+                reflection_manager_factory=lambda namespace, store: FakeReflectionManager(namespace, store),
+            )
+            context = AgentContext(
+                handler_name="EventHandler",
+                screen_type="EVENT",
+                available_commands=["choose"],
+                choice_list=["a"],
+                game_state={"floor": 5, "act": 1, "character_class": "IRONCLAD"},
+                extras={"run_id": "ironclad:seed1", "agent_identity": "neo_primates"},
+            )
+            service.record_accepted_decision(
+                context,
+                AgentDecision(proposed_command="choose 0", confidence=0.9, explanation="test"),
+            )
+            service.shutdown(wait=True)
+
+            records = repo.load_all()
+            self.assertEqual(1, len(records))
+            self.assertIsNone(records[0].importance)
+
+    def test_format_search_results_includes_importance_tag_when_enabled(self):
+        from datetime import datetime, timezone
+        from langgraph.store.base import SearchItem
+
+        config = LlmConfig(
+            enabled=True,
+            langmem_enabled=True,
+            langmem_importance_scoring_enabled=True,
+            langmem_min_similarity_score=0.5,
+        )
+        service = LangMemService(config=config, embeddings_client=FakeEmbeddings())
+        now = datetime.now(timezone.utc)
+        items = [
+            SearchItem(namespace=("test",), key="a", value={"content": "test memory", "handler_name": "B", "importance": 8.0}, created_at=now, updated_at=now, score=0.85),
+        ]
+        result = service._format_search_results(items, "SEM")
+        self.assertIn("imp=8", result)
+        self.assertIn("match=0.85", result)
+
+
 if __name__ == "__main__":
     unittest.main()
