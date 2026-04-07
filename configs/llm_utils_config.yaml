@@ -1,4 +1,5 @@
 fast_llm_model: qwen-local
+# fast_llm_model: gemma4-uncensored
 llm_enable_thinking: true
 llm_two_layer_struct_convert: true
 # Use OpenRouter by setting fast_llm_model to openrouter/<provider>/<model>

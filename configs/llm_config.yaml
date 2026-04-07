@@ -13,6 +13,8 @@ battle_potion_allowed_room_types:
   - MonsterRoomBoss
 langmem:
   enabled: true
+  inject_episodic_memories: false
+  inject_semantic_memories: false
   sqlite_path: dataset/langmem/memory.sqlite3
   embeddings_base_url: ""
   embeddings_api_key: ""

@@ -1,9 +1,19 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from rs.llm.agents.base_agent import AgentContext
+from rs.utils.path_utils import get_repo_root
+from rs.utils.yaml_utils import load_yaml_mapping
+
+
+@lru_cache(maxsize=1)
+def _load_battle_tactics() -> dict[str, Any]:
+    path = get_repo_root() / "configs" / "battle_tactics.yaml"
+    return load_yaml_mapping(path)
 
 
 _SYSTEM_PROMPT = """You are the battle subagent for a Slay the Spire bot.
@@ -13,6 +23,7 @@ You are controlling exactly one battle session. Decide the next best step for th
 Situational guidelines:
 - If you can defeat an enemy within a few moves, prioritise finishing it off.
 - If the enemy's attack would kill you or leave you critically low, prioritise blocking.
+- If the enemy is not attacking this turn (e.g. buffing, debuffing you, or defending), spend all resources on damage — block has zero value when no damage is incoming.
 - Potions are reserved for elite and boss fights. If potion commands appear in the legal actions, use them only when they provide a decisive advantage.
 - If you cannot defeat the enemy soon and it is attacking, balance damage and block based on the threat.
 - In multi-enemy fights, focus fire on one enemy to reduce incoming damage sources.
@@ -68,6 +79,19 @@ def _build_state_payload(context: AgentContext, working_memory: dict[str, Any]) 
     monsters = context.extras.get("monster_summaries", [])
     potions = context.extras.get("potion_summaries", [])
     player_powers = context.extras.get("player_powers", [])
+
+    # Enrich monsters with enemy tactics from knowledge base
+    tactics = _load_battle_tactics()
+    enemy_db = tactics.get("enemies", {})
+    if enemy_db:
+        enriched_monsters = []
+        for m in monsters:
+            tips = enemy_db.get(m.get("name", ""), [])
+            if tips:
+                m = dict(m)
+                m["tactics"] = tips
+            enriched_monsters.append(m)
+        monsters = enriched_monsters
 
     payload: dict[str, Any] = {
         "game": gs,
@@ -126,6 +150,12 @@ def build_battle_system_prompt(context: AgentContext, working_memory: dict[str, 
             for r in relic_summaries
         ]
         parts.append("\nRelics:\n" + "\n".join(relic_lines))
+
+    tactics = _load_battle_tactics()
+    char_class = str(context.game_state.get("character_class", "")).upper()
+    char_rules = tactics.get("characters", {}).get(char_class, [])
+    if char_rules:
+        parts.append("\nCharacter mechanics:\n" + "\n".join(f"- {r}" for r in char_rules))
 
     return "\n".join(parts)
 

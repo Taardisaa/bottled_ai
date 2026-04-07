@@ -30,6 +30,8 @@ class LlmConfig:
     langmem_embeddings_model: str = "BAAI/bge-small-en-v1.5"
     langmem_top_k: int = 3
     langmem_reflection_batch_size: int = 5
+    langmem_inject_episodic_memories: bool = True
+    langmem_inject_semantic_memories: bool = True
     langmem_max_semantic_memories_per_namespace: int = 50
     langmem_max_retrospective_memories: int = 50
     langmem_min_record_confidence: float = 0.35
@@ -110,6 +112,12 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
     langmem_embeddings_model_default = str(langmem_values.get("embeddings_model", "BAAI/bge-small-en-v1.5"))
     langmem_top_k_default = int(langmem_values.get("top_k", 3))
     langmem_reflection_batch_size_default = int(langmem_values.get("reflection_batch_size", 5))
+    langmem_inject_episodic_memories_default = bool(
+        langmem_values.get("inject_episodic_memories", True)
+    )
+    langmem_inject_semantic_memories_default = bool(
+        langmem_values.get("inject_semantic_memories", True)
+    )
     langmem_max_semantic_memories_per_namespace_default = int(
         langmem_values.get("max_semantic_memories_per_namespace", 50)
     )
@@ -156,6 +164,14 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
     langmem_reflection_batch_size = int(
         os.environ.get("LANGMEM_REFLECTION_BATCH_SIZE", str(langmem_reflection_batch_size_default))
     )
+    langmem_inject_episodic_memories = _parse_bool(
+        os.environ.get("LANGMEM_INJECT_EPISODIC_MEMORIES"),
+        langmem_inject_episodic_memories_default,
+    )
+    langmem_inject_semantic_memories = _parse_bool(
+        os.environ.get("LANGMEM_INJECT_SEMANTIC_MEMORIES"),
+        langmem_inject_semantic_memories_default,
+    )
     langmem_max_semantic_memories_per_namespace = int(
         os.environ.get(
             "LANGMEM_MAX_SEMANTIC_MEMORIES_PER_NAMESPACE",
@@ -197,6 +213,8 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
         langmem_embeddings_model=langmem_embeddings_model,
         langmem_top_k=langmem_top_k,
         langmem_reflection_batch_size=langmem_reflection_batch_size,
+        langmem_inject_episodic_memories=langmem_inject_episodic_memories,
+        langmem_inject_semantic_memories=langmem_inject_semantic_memories,
         langmem_max_semantic_memories_per_namespace=langmem_max_semantic_memories_per_namespace,
         langmem_max_retrospective_memories=langmem_max_retrospective_memories,
         langmem_min_record_confidence=langmem_min_record_confidence,

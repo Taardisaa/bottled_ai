@@ -1,0 +1,80 @@
+characters:
+  IRONCLAD:
+    - "Burning Blood relic: heals 6 HP after each combat. Can afford to trade HP for faster kills."
+    - "Strength scaling: many cards gain Strength permanently (Demon Form, Inflame, Spot Weakness). Stacking Strength makes every Attack hit harder."
+    - "Exhaust synergy: Exhausting cards triggers Feel No Pain (block), Dark Embrace (draw), and Dead Branch (card generation). Build around exhaust when these are available."
+    - "Self-damage cards (Offering, Brutality, Hemokinesis) are powerful because Burning Blood recovers HP. Use them aggressively."
+    - "Barricade + Body Slam: Block carries over between turns with Barricade. Body Slam deals damage equal to current Block — stack block, then slam."
+  SILENT:
+    - "Ring of the Snake relic: draw 2 extra cards on turn 1. Use the large opening hand to set up Poison or burst damage."
+    - "Poison scaling: Poison deals its full amount then decreases by 1 each turn. Stacking Poison on enemies with high HP is more efficient than direct damage."
+    - "Shiv synergy: Shivs are 0-cost attacks that deal 4 damage (6 upgraded). With Accuracy (+damage per Shiv) or After Image (block per card), Shivs become very strong."
+    - "Discard synergy: cards like Calculated Gamble, Tactician, and Reflex trigger effects when discarded. Use discard as a resource, not just hand management."
+    - "Weak and Vulnerable: Silent has many sources of Weak (Leg Sweep, Crippling Cloud). Apply Weak to reduce enemy damage by 25%, and Vulnerable to increase your damage by 50%."
+  DEFECT:
+    - "Cracked Core relic: Channel 1 Lightning at the start of each combat. Free passive damage every turn."
+    - "Orb mechanics: Orbs sit in slots and provide passive effects each turn. Lightning deals damage, Frost gains Block, Dark stores damage, Plasma gains Energy. Evoking an orb triggers its effect at full power."
+    - "Focus scaling: Focus increases orb passive AND evoke values. Stacking Focus (Defragment, Consume, Biased Cognition) is the primary scaling path."
+    - "Orb slot management: more slots = more passive effects per turn. Capacitor adds slots. Consume removes a slot but gives Focus."
+    - "Frost orbs for defense: each Frost orb passively gains Block equal to 2+Focus. With high Focus, Frost orbs provide massive block every turn without playing cards."
+  WATCHER:
+    - "Wrath stance: your attacks deal DOUBLE damage, but you also take DOUBLE damage. Be aggressive in Wrath — block is less effective, so prioritize killing enemies or exiting Wrath before the enemy attacks."
+    - "Calm stance: upon EXITING Calm, gain 2 Energy. Enter Calm before switching to Wrath to bank extra energy."
+    - "Divinity stance: attacks deal TRIPLE damage and you gain 3 Energy on entry. Use this for massive burst damage turns."
+    - "Mantra: accumulating 10 Mantra automatically enters Divinity. Plan Mantra gains to enter Divinity on turns you can deal maximum damage."
+    - "Retain: some cards are kept between turns. Use retained cards to set up multi-turn combos."
+    - "Stance switching: switching stances triggers Mental Fortress (block) and Rushdown (draw) if those powers are active. Frequent stance switches amplify these effects."
+
+enemies:
+  Jaw Worm:
+    - "Buffs itself with Strength over time. Kill quickly before it scales."
+  Cultist:
+    - "Gains Ritual (Strength each turn). Kill fast before damage snowballs."
+  Gremlin Nob:
+    - "Gains Strength whenever you play a Skill. Prioritize Attack cards, avoid playing Skills unless necessary."
+  Lagavulin:
+    - "Sleeps for 3 turns, then debuffs you with -1 Strength and -1 Dexterity each turn. Front-load damage while asleep, or skip the fight if possible."
+  3 Sentries:
+    - "Shuffle Daze (status) cards into your draw pile. Kill the middle Sentry first to stop Dazes. Exhaust Dazes when possible."
+  Sentry:
+    - "Shuffle Daze (status) cards into your draw pile. Kill Sentries one at a time. Exhaust Dazes when possible."
+  Hexaghost:
+    - "Deals massive multi-hit damage on certain turns. Block heavily on Inferno turns. Its damage scales with your HP on turn 1."
+  Slime Boss:
+    - "Splits at 50% HP into two smaller slimes. Try to burst it from above 50% to dead in one turn to avoid the split."
+  The Guardian:
+    - "Alternates between offensive and defensive mode. In defensive mode it gains Thorns and Sharp Hide — avoid multi-hit attacks. Burst it during offensive mode."
+  Awakened One:
+    - "Gains Strength whenever you play a Power card. Avoid playing Powers in phase 1. After it dies and revives, Powers are safe."
+  Time Eater:
+    - "Ends your turn after you play 12 cards and heals. Plan high-impact turns with fewer cards rather than many small plays."
+  Donu:
+    - "Donu buffs Strength for both itself and Deca. Kill Donu first to stop scaling."
+  Deca:
+    - "Deca applies block. Kill Donu first, then handle Deca."
+  The Heart:
+    - "Deals increasing damage each turn with Beat of Death (damage per card played). Limit cards played per turn. Use Intangible or massive block."
+  Book of Stabbing:
+    - "Multi-hit attack that gains hits each turn. Kill quickly or build massive block."
+  Reptomancer:
+    - "Summons Daggers that deal high damage. Kill Daggers immediately, then focus the Reptomancer."
+  Gremlin Leader:
+    - "Buffs minions and summons more. Kill the Leader to end the fight; ignore minions unless they threaten lethal."
+  Snecko:
+    - "Applies Confused (randomizes card costs). Play high-cost cards when they roll cheap."
+  Chosen:
+    - "Applies Hex (playing non-Attacks shuffles Daze into draw pile). Prioritize Attacks over Skills."
+  Spheric Guardian:
+    - "Starts with high Block (40+). Apply Vulnerable or use multi-hit attacks to break through."
+  Nemesis:
+    - "Goes Intangible (all damage reduced to 1). Skip damage turns when Intangible, block instead, then burst on vulnerable turns."
+  Giant Head:
+    - "Has Slow: each card you play makes it take 10% more damage from Attacks this turn. Play many cards to amplify your damage. Its main threat is a large single attack — block heavily on attack turns."
+  Writhing Mass:
+    - "Changes intent reactively. Attacks trigger defensive mode, Skills trigger offensive mode. Watch intent carefully each turn."
+  Bronze Automaton:
+    - "Summons Orbs that buff it. Kill Orbs quickly, then focus the Automaton."
+  Transient:
+    - "Has 999 HP but dies after 5 turns. Deal as much damage as possible — every point of damage it still has when it dies is dealt to you."
+  Shield and Spear:
+    - "Spear attacks, Shield buffs. Kill Spear first to reduce incoming damage, then Shield."

@@ -332,6 +332,12 @@ def _litellm_completion_kwargs(model: str, temperature: float, **extra_kwargs: A
             kwargs.get("extra_body"),
             {"chat_template_kwargs": {"enable_thinking": effective_enable_thinking}},
         )
+    elif _has_custom_base_url() and not _is_qwen3_model(model):
+        effective = config.llm_enable_thinking if enable_thinking is None else bool(enable_thinking)
+        kwargs["extra_body"] = _merge_extra_body(
+            kwargs.get("extra_body"),
+            {"reasoning_effort": "high" if effective else "none"},
+        )
     return kwargs
 
 

@@ -115,6 +115,13 @@ class BattleSessionResult:
     summary: str = ""
 
 
+def _reasoning_model_kwargs(cfg: Any) -> dict[str, Any]:
+    if not cfg.llm_base_url:
+        return {}
+    effort = "high" if cfg.llm_enable_thinking else "none"
+    return {"extra_body": {"reasoning_effort": effort}}
+
+
 class BattleSubagent:
     def __init__(
             self,
@@ -134,6 +141,7 @@ class BattleSubagent:
                 base_url=llm_config.llm_base_url or llm_config.openai_base_url,
                 api_key=llm_config.llm_api_key or llm_config.openai_key,
                 temperature=0.6,
+                model_kwargs=_reasoning_model_kwargs(llm_config),
             )
 
         retrieve_tool = make_retrieve_battle_experience_tool(self._langmem_service)

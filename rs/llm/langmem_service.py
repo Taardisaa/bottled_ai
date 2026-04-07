@@ -512,12 +512,14 @@ class LangMemService:
         semantic_namespace = self._semantic_namespace(context)
         retrospective_namespace = self._retrospective_namespace(context)
 
+        inject_episodic = self._config.langmem_inject_episodic_memories
+        inject_semantic = self._config.langmem_inject_semantic_memories
         with self._lock:
-            episodic_items = self._store.search(episodic_namespace, query=query, limit=self._config.langmem_top_k)
-            semantic_items = self._store.search(semantic_namespace, query=query, limit=self._config.langmem_top_k)
+            episodic_items = self._store.search(episodic_namespace, query=query, limit=self._config.langmem_top_k) if inject_episodic else []
+            semantic_items = self._store.search(semantic_namespace, query=query, limit=self._config.langmem_top_k) if inject_semantic else []
             retrospective_items = self._store.search(
                 retrospective_namespace, query=query, limit=self._config.langmem_top_k
-            )
+            ) if inject_semantic else []
         _elapsed_ms = (_time.perf_counter() - _t0) * 1000
         log_to_run(f"[TIMING] LangMem.build_context_memory handler={context.handler_name} took {_elapsed_ms:.0f}ms")
 
@@ -800,11 +802,16 @@ class LangMemService:
 
         chat_base_url = llm_runtime_config.llm_base_url or llm_runtime_config.openai_base_url or None
         chat_api_key = llm_runtime_config.llm_api_key or llm_runtime_config.openai_key or "langmem-reflection"
+        reasoning_kwargs: dict[str, Any] = {}
+        if llm_runtime_config.llm_base_url:
+            effort = "high" if llm_runtime_config.llm_enable_thinking else "none"
+            reasoning_kwargs = {"extra_body": {"reasoning_effort": effort}}
         chat_model = ChatOpenAI(
             model=llm_runtime_config.fast_llm_model,
             base_url=chat_base_url,
             api_key=chat_api_key,
             temperature=0.6,
+            model_kwargs=reasoning_kwargs,
         )
         compatible_chat_model = CompatibilityToolCallChatModel(model=chat_model)
         return create_memory_store_manager(
