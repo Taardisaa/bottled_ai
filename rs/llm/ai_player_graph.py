@@ -121,12 +121,8 @@ class AIPlayerGraph:
         self._card_reward_provider = CardRewardLlmProvider()
         self._map_provider = MapLlmProvider()
         self._generic_provider = GenericLlmProvider()
-        self._battle_subagent = BattleSubagent(
-            langmem_service=self._langmem_service,
-            config=BattleSubagentConfig(
-                potion_allowed_room_types=list(self._config.battle_potion_allowed_room_types),
-            ),
-        ) if battle_subagent is None else battle_subagent
+        # Battle subagent is initialized after grid_select_subagent (deterministic mode needs it)
+        self._battle_subagent_override = battle_subagent
         self._campfire_subagent = (
             CampfireSubagent(langmem_service=self._langmem_service)
             if campfire_subagent is None else campfire_subagent
@@ -147,6 +143,24 @@ class AIPlayerGraph:
             GridSelectSubagent(langmem_service=self._langmem_service)
             if grid_select_subagent is None else grid_select_subagent
         )
+        if self._battle_subagent_override is not None:
+            self._battle_subagent = self._battle_subagent_override
+        elif self._config.use_deterministic_battle:
+            from rs.llm.deterministic_battle import DeterministicBattleSubagent
+            self._battle_subagent = DeterministicBattleSubagent(
+                langmem_service=self._langmem_service,
+                config=BattleSubagentConfig(
+                    potion_allowed_room_types=list(self._config.battle_potion_allowed_room_types),
+                ),
+                grid_select_subagent=self._grid_select_subagent,
+            )
+        else:
+            self._battle_subagent = BattleSubagent(
+                langmem_service=self._langmem_service,
+                config=BattleSubagentConfig(
+                    potion_allowed_room_types=list(self._config.battle_potion_allowed_room_types),
+                ),
+            )
         self._action_policy = ActionPolicyRegistry()
         self._last_card_reward_skip: dict[str, Any] | None = None
         self._last_card_reward_skip_consumed: bool = False

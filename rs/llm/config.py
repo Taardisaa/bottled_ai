@@ -23,6 +23,7 @@ class LlmConfig:
     graph_trace_enabled: bool = True
     graph_trace_path: str = "logs/ai_player_graph.jsonl"
     ai_player_graph_enabled: bool = False
+    use_deterministic_battle: bool = False
     langmem_enabled: bool = False
     langmem_sqlite_path: str = "dataset/langmem/memory.sqlite3"
     langmem_embeddings_base_url: str = ""
@@ -110,6 +111,7 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
     graph_trace_enabled_default = bool(values.get("graph_trace_enabled", True))
     graph_trace_path_default = str(values.get("graph_trace_path", "logs/ai_player_graph.jsonl"))
     ai_player_graph_enabled_default = bool(values.get("ai_player_graph_enabled", False))
+    use_deterministic_battle_default = bool(values.get("use_deterministic_battle", False))
     langmem_values = values.get("langmem", {})
     langmem_enabled_default = bool(langmem_values.get("enabled", False))
     langmem_sqlite_path_default = str(langmem_values.get("sqlite_path", "dataset/langmem/memory.sqlite3"))
@@ -167,6 +169,10 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
     ai_player_graph_enabled = _parse_bool(
         os.environ.get("AI_PLAYER_GRAPH_ENABLED"),
         ai_player_graph_enabled_default,
+    )
+    use_deterministic_battle = _parse_bool(
+        os.environ.get("USE_DETERMINISTIC_BATTLE"),
+        use_deterministic_battle_default,
     )
     langmem_enabled = _parse_bool(os.environ.get("LANGMEM_ENABLED"), langmem_enabled_default)
     langmem_sqlite_path = os.environ.get("LANGMEM_SQLITE_PATH", langmem_sqlite_path_default)
@@ -247,6 +253,7 @@ def load_llm_config(config_path: str | None = None) -> LlmConfig:
         graph_trace_enabled=graph_trace_enabled,
         graph_trace_path=graph_trace_path,
         ai_player_graph_enabled=ai_player_graph_enabled,
+        use_deterministic_battle=use_deterministic_battle,
         langmem_enabled=langmem_enabled,
         langmem_sqlite_path=langmem_sqlite_path,
         langmem_embeddings_base_url=langmem_embeddings_base_url,

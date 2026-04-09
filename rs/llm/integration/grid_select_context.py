@@ -29,13 +29,22 @@ def _build_card_rows(cards: Any) -> list[dict[str, Any]]:
     return rows
 
 
-def _grid_mode(screen_state: dict[str, Any]) -> str:
+def _grid_mode(screen_state: dict[str, Any], current_action: str = "") -> str:
     if screen_state.get("for_purge"):
         return "purge"
     if screen_state.get("for_transform"):
         return "transform"
     if screen_state.get("for_upgrade"):
         return "upgrade"
+    action = current_action.lower()
+    if "scry" in action:
+        return "scry"
+    if "discard" in action:
+        return "discard"
+    if "exhaust" in action:
+        return "exhaust"
+    if action:
+        return f"combat_select ({current_action})"
     return "unknown"
 
 
@@ -75,7 +84,8 @@ def build_grid_select_agent_context(state: GameState, handler_name: str) -> Agen
         extras={
             "run_id": run_summary["run_id"],
             "agent_identity": get_current_agent_identity(),
-            "grid_mode": _grid_mode(screen_state),
+            "current_action": game_state.get("current_action", ""),
+            "grid_mode": _grid_mode(screen_state, game_state.get("current_action", "")),
             "for_purge": bool(screen_state.get("for_purge", False)),
             "for_transform": bool(screen_state.get("for_transform", False)),
             "for_upgrade": bool(screen_state.get("for_upgrade", False)),

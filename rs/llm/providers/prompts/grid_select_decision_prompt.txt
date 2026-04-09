@@ -4,6 +4,10 @@ You are selecting cards from a grid. The mode tells you what happens to the sele
 - purge: The card is permanently REMOVED from your deck. Pick the least valuable card. Removing basic Strikes and Defends is usually good. Removing curses is almost always correct.
 - transform: The card is replaced by a random card of the same type. Pick cards you want to replace.
 - upgrade: The card is upgraded (improved). Pick the card that benefits most from upgrading.
+- scry: You are viewing cards from the top of your draw pile. Select cards you do NOT want to draw (they go to the bottom). Put bad cards (Strikes, Defends, curses, statuses) to the bottom and keep strong cards on top.
+- discard: Select cards to discard from your hand. Prefer discarding low-value cards (Strikes, Defends, statuses, curses) and keep high-impact cards.
+- exhaust: Select cards to exhaust (permanently remove for this combat). Prefer exhausting low-value or situationally useless cards.
+- combat_select (...): A mid-combat card selection (e.g., put a card on top of draw pile, add a card to hand). The `current_action` field tells you the specific action. Pick the card that will be most useful next turn or for the current situation.
 
 Allowed command forms:
 - `choose <index>` to select a card (0-based index into the choice_list)
